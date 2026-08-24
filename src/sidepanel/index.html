@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>RAIDX Agent</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="bar">
+      <div class="brand">
+        <span class="dot" id="status-dot"></span>
+        <strong>RAIDX</strong>
+      </div>
+      <div class="bar-actions">
+        <button id="new-task" class="ghost" title="Clear the transcript">New</button>
+        <button id="settings" class="ghost" title="Open options">Settings</button>
+      </div>
+    </header>
+
+    <main id="transcript" class="transcript">
+      <div class="empty" id="empty">
+        <h2>What should I do?</h2>
+        <p>I work in the tab you have open. Tell me a goal, not a click.</p>
+        <ul class="examples">
+          <li data-example="Summarise this page in five bullet points.">Summarise this page in five bullet points</li>
+          <li data-example="Find the pricing page on this site and tell me the cheapest paid plan.">Find the cheapest paid plan on this site</li>
+          <li data-example="Search Hacker News for posts about browser agents from the last month and list the top five.">Search Hacker News for browser-agent posts</li>
+        </ul>
+      </div>
+    </main>
+
+    <div id="confirm" class="confirm hidden">
+      <p id="confirm-text"></p>
+      <div class="confirm-actions">
+        <button id="confirm-no" class="ghost">Cancel</button>
+        <button id="confirm-yes" class="primary">Allow</button>
+      </div>
+    </div>
+
+    <form id="composer" class="composer">
+      <textarea
+        id="input"
+        rows="2"
+        placeholder="Give me a task…  (Enter to send, Shift+Enter for a new line)"
+      ></textarea>
+      <button id="send" type="submit" class="primary">Run</button>
+      <button id="stop" type="button" class="danger hidden">Stop</button>
+    </form>
+
+    <script type="module" src="sidepanel.js"></script>
+  </body>
+</html>

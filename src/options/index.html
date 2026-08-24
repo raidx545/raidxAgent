@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>RAIDX Agent — Settings</title>
+    <link rel="stylesheet" href="styles.css" />
+    <style>
+      body { height: auto; padding: 28px; max-width: 620px; margin: 0 auto; display: block; }
+      h1 { font-size: 18px; margin: 0 0 4px; }
+      .sub { color: var(--muted); margin: 0 0 24px; }
+      label { display: block; font-weight: 600; margin: 18px 0 4px; }
+      .hint { color: var(--muted); font-size: 12.5px; margin: 4px 0 0; }
+      .hint a { color: var(--accent); }
+      input[type="text"], input[type="password"], input[type="number"], select {
+        width: 100%; font: inherit; color: var(--text); background: var(--surface);
+        border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 10px;
+      }
+      .tabs { display: flex; gap: 6px; margin-top: 6px; }
+      .tabs button {
+        flex: 1; background: var(--surface); border: 1px solid var(--border); color: var(--muted);
+      }
+      .tabs button[aria-selected="true"] {
+        border-color: var(--accent); color: var(--text); background: var(--accent-soft);
+        font-weight: 600;
+      }
+      .with-button { display: flex; gap: 8px; align-items: stretch; }
+      .with-button input { flex: 1; }
+      .with-button button { white-space: nowrap; }
+      .row { display: flex; align-items: center; gap: 8px; margin-top: 18px; }
+      .row input { width: auto; }
+      .row label { margin: 0; }
+      footer { margin-top: 26px; display: flex; align-items: center; gap: 12px; }
+      #saved { font-size: 12.5px; }
+      #saved.ok { color: var(--ok); }
+      #saved.bad { color: var(--danger); }
+      #model-status { min-height: 1.2em; }
+    </style>
+  </head>
+  <body>
+    <h1>RAIDX Agent</h1>
+    <p class="sub">
+      Settings are stored locally in this browser profile. Your key is only ever sent to the
+      provider you selected, as the authorization header on your own API calls.
+    </p>
+
+    <label>Provider</label>
+    <div class="tabs" id="provider-tabs" role="tablist"></div>
+    <p class="hint" id="provider-hint"></p>
+
+    <label for="apiKey">API key</label>
+    <input id="apiKey" type="password" autocomplete="off" spellcheck="false" />
+    <p class="hint">Each provider's key is remembered separately, so switching back does not lose it.</p>
+
+    <label for="model">Model</label>
+    <div class="with-button">
+      <input id="model" type="text" list="model-list" spellcheck="false" autocomplete="off" />
+      <button id="refresh-models" class="ghost" type="button">Refresh list</button>
+    </div>
+    <datalist id="model-list"></datalist>
+    <p class="hint" id="model-status">
+      Type any model id the provider accepts. The dropdown is a starting point — hit
+      <strong>Refresh list</strong> to pull what your key can actually reach.
+    </p>
+
+    <label for="maxSteps">Step limit per task</label>
+    <input id="maxSteps" type="number" min="5" max="200" />
+    <p class="hint">How many planning turns before the agent gives up. Most real tasks land in 5–15.</p>
+
+    <div class="row">
+      <input id="confirmRisky" type="checkbox" />
+      <label for="confirmRisky">Ask before anything irreversible</label>
+    </div>
+    <p class="hint">
+      Purchases, sends, deletes, and form submissions pause for your approval. Credential and
+      payment fields are always refused, whether or not this is on.
+    </p>
+
+    <footer>
+      <button id="save" class="primary">Save</button>
+      <span id="saved"></span>
+    </footer>
+
+    <script type="module" src="options.js"></script>
+  </body>
+</html>
