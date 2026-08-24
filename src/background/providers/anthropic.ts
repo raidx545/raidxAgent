@@ -9,6 +9,20 @@ import type {
 } from "./types";
 import { PlannerError, parseArguments } from "./types";
 
+/** Splits a PNG data URL into the parts the API wants. */
+function imageBlock(dataUrl: string): Anthropic.ImageBlockParam | undefined {
+  const match = /^data:(image\/[a-z+]+);base64,(.+)$/i.exec(dataUrl);
+  if (!match) return undefined;
+  return {
+    type: "image",
+    source: {
+      type: "base64",
+      media_type: match[1] as "image/png",
+      data: match[2],
+    },
+  };
+}
+
 export function toMessages(messages: ConvMessage[]): Anthropic.MessageParam[] {
   return messages.map((message): Anthropic.MessageParam => {
     if (message.role === "user") {
@@ -65,14 +79,30 @@ export function createAnthropicPlanner(apiKey: string, model: string): Planner {
   return {
     label: `Anthropic ${model}`,
 
-    async run({ system, messages, tools, signal, onText }: PlannerRequest): Promise<PlannerTurn> {
+    async run({ system, messages, tools, signal, onText, image }: PlannerRequest): Promise<PlannerTurn> {
+      const built = toMessages(messages);
+
+      // Attach the screenshot to the newest user turn, so the model sees the
+      // page as it looks now rather than as it looked several steps ago.
+      if (image) {
+        const block = imageBlock(image);
+        const last = built[built.length - 1];
+        if (block && last?.role === "user") {
+          const content = typeof last.content === "string"
+            ? [{ type: "text" as const, text: last.content }]
+            : [...last.content];
+          // Image first: the model reads it as context for the text that follows.
+          built[built.length - 1] = { role: "user", content: [block, ...content] };
+        }
+      }
+
       const stream = client.messages.stream(
         {
           model,
           max_tokens: 8000,
           system,
           tools: toTools(tools),
-          messages: toMessages(messages),
+          messages: built,
         },
         { signal },
       );

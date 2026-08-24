@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>RAIDX — Wire Log</title>
+    <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="inspector.css" />
+    <style>
+      .turn { border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 12px; background: var(--surface); }
+      .turn > summary { padding: 10px 14px; cursor: pointer; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+      .turn > summary::-webkit-details-marker { display: none; }
+      .turn[open] > summary { border-bottom: 1px solid var(--border); }
+      .turn .body { padding: 12px 14px; }
+      .msg { margin-bottom: 12px; }
+      .msg h4 { margin: 0 0 4px; font-size: 11.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+      .msg pre {
+        margin: 0; padding: 10px 12px; background: var(--bg); border: 1px solid var(--border);
+        border-radius: 6px; font-size: 11.5px; line-height: 1.6; overflow-x: auto;
+        white-space: pre-wrap; word-break: break-word; max-height: 340px;
+      }
+      .tok { color: var(--accent); font-weight: 600; }
+      .shot img { max-width: 100%; border: 1px solid var(--border); border-radius: 6px; }
+      .verdict { font-weight: 600; }
+      .verdict.clean { color: var(--ok); }
+      .verdict.dirty { color: var(--danger); }
+      .empty { color: var(--muted); padding: 20px 0; }
+    </style>
+  </head>
+  <body class="inspector">
+    <header class="bar">
+      <div class="brand"><strong>Wire Log</strong></div>
+      <div class="bar-actions">
+        <button id="refresh" class="primary">Refresh</button>
+        <button id="copy" class="ghost">Copy as JSON</button>
+        <button id="clear" class="ghost">Clear</button>
+      </div>
+    </header>
+
+    <p class="notice">
+      Every payload this extension has sent to a model, exactly as it was sent. Each turn is
+      re-scanned for PII at the moment of sending &mdash; that verdict is the claim, and it is
+      checked here on the real page rather than only in tests.
+    </p>
+
+    <div id="status" class="status"></div>
+    <section id="turns"></section>
+
+    <script type="module" src="wirelog.js"></script>
+  </body>
+</html>

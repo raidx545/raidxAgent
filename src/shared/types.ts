@@ -1,4 +1,7 @@
 import type { ProviderId } from "../background/providers/types";
+import type { DomCapture } from "../capture/types";
+import type { MintRequest } from "../vault/protocol";
+import type { SpanRectRequest, SpanRectResult } from "../capture/spans";
 
 /**
  * Wire types shared by the side panel, the service worker, and the content
@@ -60,14 +63,44 @@ export interface ActionResult {
   ok: boolean;
   /** Human- and model-readable description of what happened. */
   detail: string;
-  /** Populated when the action changed the page enough to warrant a re-read. */
-  snapshot?: PageSnapshot;
+  /**
+   * A fresh view of the page, populated when the action may have changed it.
+   *
+   * There is one page representation and one id space. The agent used to have
+   * a second, flatter one of its own, which meant the ids the planner was
+   * shown and the ids actions resolved against came from different registries -
+   * fine until the planner started seeing the sanitized tree, at which point
+   * every click would have landed on the wrong element.
+   */
+  capture?: DomCapture;
+  /** Populated by the fullpage-* requests. */
+  page?: {
+    scrollX: number;
+    scrollY: number;
+    pageWidth: number;
+    pageHeight: number;
+    viewportWidth: number;
+    viewportHeight: number;
+    dpr: number;
+    /** Elements hidden for the capture, so the caller knows it happened. */
+    stickyHidden: number;
+  };
+  /** Populated only for a "span-rects" request. */
+  rects?: SpanRectResult[];
 }
 
 /** Messages the content script accepts. */
 export type ContentRequest =
-  | { kind: "snapshot" }
   | { kind: "act"; action: AgentAction }
+  | { kind: "capture" }
+  /** Prepare the page for a full-page capture; returns its dimensions. */
+  | { kind: "fullpage-begin" }
+  /** Scroll to a document offset and report where we actually landed. */
+  | { kind: "fullpage-scroll"; y: number; hideSticky: boolean }
+  /** Undo everything fullpage-begin changed. */
+  | { kind: "fullpage-end" }
+  /** Where on screen are these character spans? */
+  | { kind: "span-rects"; requests: SpanRectRequest[] }
   | { kind: "ping" };
 
 /** A rendered entry in the side panel transcript. */
@@ -84,7 +117,14 @@ export interface TranscriptEntry {
 /** Service worker -> side panel events. */
 export type AgentEvent =
   | { kind: "entry"; entry: TranscriptEntry }
-  | { kind: "patch"; id: string; text?: string; pending?: boolean }
+  | {
+      kind: "patch";
+      id: string;
+      text?: string;
+      pending?: boolean;
+      /** Replace the entry's text rather than appending to it. */
+      replace?: boolean;
+    }
   | { kind: "status"; running: boolean }
   | {
       kind: "confirm";
@@ -98,7 +138,22 @@ export type PanelCommand =
   | { kind: "stop" }
   | { kind: "reset" }
   | { kind: "confirm-reply"; id: string; approved: boolean }
-  | { kind: "get-state" };
+  | { kind: "get-state" }
+  /** Capture + PII scan of a tab. Standalone — does not involve the planner. */
+  | { kind: "inspect"; tabId?: number; fullPage?: boolean }
+  /** Mint every token one sanitization pass needs, in one round trip. */
+  | { kind: "vault-mint"; requests: MintRequest[] }
+  /** Content-free listing of what the vault holds. */
+  | { kind: "vault-view" }
+  /** Drop every mapping. Tokens already issued become unresolvable. */
+  | { kind: "vault-clear" }
+  /** Swap tokens back for real values, reporting any the vault never issued. */
+  | { kind: "vault-resolve"; text: string }
+  /** Ask a tab where a batch of tokenized spans is painted. */
+  | { kind: "span-rects"; tabId: number; requests: SpanRectRequest[] }
+  /** Everything sent to a model so far, exactly as it was sent. */
+  | { kind: "wire-log" }
+  | { kind: "wire-clear" };
 
 export interface Settings {
   provider: ProviderId;
@@ -110,6 +165,21 @@ export interface Settings {
   maxSteps: number;
   /** Ask before click/type on anything that looks irreversible. */
   confirmRisky: boolean;
+  /**
+   * Send the redacted screenshot to the planner alongside the tokenized tree.
+   *
+   * Faces are destroyed and tokenized text is painted over with the same token
+   * the tree uses, so the picture cannot contradict the text. Costs image
+   * tokens on every turn.
+   */
+  sendScreenshot: boolean;
+  /**
+   * Capture the whole scrollable page rather than the viewport.
+   *
+   * More complete, but scrolls the tab and costs about half a second per
+   * screen. Off by default in the agent loop, where it runs every step.
+   */
+  fullPageCapture: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -122,6 +192,8 @@ export const DEFAULT_SETTINGS: Settings = {
   },
   maxSteps: 40,
   confirmRisky: true,
+  sendScreenshot: true,
+  fullPageCapture: false,
 };
 
 /** The shape stored before multi-provider support landed. */

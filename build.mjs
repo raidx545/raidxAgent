@@ -1,5 +1,5 @@
 import * as esbuild from "esbuild";
-import { cp, mkdir, rm } from "node:fs/promises";
+import { cp, mkdir, rm, writeFile } from "node:fs/promises";
 
 const watch = process.argv.includes("--watch");
 
@@ -11,6 +11,10 @@ await cp("src/manifest.json", "dist/manifest.json");
 await cp("src/sidepanel/index.html", "dist/sidepanel.html");
 await cp("src/sidepanel/styles.css", "dist/styles.css");
 await cp("src/options/index.html", "dist/options.html");
+await cp("src/inspector/index.html", "dist/inspector.html");
+await cp("src/offscreen/vault-host.html", "dist/vault-host.html");
+await cp("src/wirelog/index.html", "dist/wirelog.html");
+await cp("src/inspector/inspector.css", "dist/inspector.css");
 await cp("icons", "dist/icons", { recursive: true });
 
 /**
@@ -54,6 +58,9 @@ const builds = [
       "service-worker": "src/background/service-worker.ts",
       sidepanel: "src/sidepanel/sidepanel.ts",
       options: "src/options/options.ts",
+      inspector: "src/inspector/inspector.ts",
+      "vault-host": "src/offscreen/vault-host.ts",
+      wirelog: "src/wirelog/wirelog.ts",
     },
   },
   // Content scripts are not modules in MV3 — must be a self-contained IIFE.
@@ -64,6 +71,31 @@ const builds = [
   },
 ];
 
+/**
+ * A self-contained page that runs the canvas-redaction half of the layer in a
+ * real browser, since Node has no OffscreenCanvas. Everything is inlined so it
+ * can be opened straight from disk with no extension and no server.
+ */
+async function buildSelfTest() {
+  const bundle = await esbuild.build({
+    entryPoints: ["test/browser/selftest.ts"],
+    bundle: true,
+    write: false,
+    format: "iife",
+    target: "chrome120",
+    logLevel: "silent",
+  });
+  const js = bundle.outputFiles[0].text;
+  await writeFile(
+    "dist/selftest.html",
+    `<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>RAIDX sanitization self-test</title></head>
+<body><p>Running…</p><script>${js}</script></body>
+</html>`,
+  );
+}
+
 if (watch) {
   for (const options of builds) {
     const ctx = await esbuild.context(options);
@@ -72,4 +104,6 @@ if (watch) {
   console.log("watching…");
 } else {
   await Promise.all(builds.map((options) => esbuild.build(options)));
+  await buildSelfTest();
+  console.log("\n  dist/selftest.html  — open in Chrome to test canvas redaction");
 }

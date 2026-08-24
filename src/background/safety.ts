@@ -1,4 +1,6 @@
-import type { AgentAction, PageElement, PageSnapshot } from "../shared/types";
+import type { AgentAction } from "../shared/types";
+import type { CapturedNode, DomCapture } from "../capture/types";
+import { allText, findNode } from "../capture/dom";
 
 /**
  * Field kinds we refuse to fill regardless of what the planner asked for.
@@ -42,17 +44,23 @@ export type Gate =
   | { verdict: "refuse"; reason: string }
   | { verdict: "confirm"; summary: string };
 
-function elementOf(snapshot: PageSnapshot | undefined, id: unknown): PageElement | undefined {
-  if (!snapshot || typeof id !== "number") return undefined;
-  return snapshot.elements.find((e) => e.id === id);
+function elementOf(capture: DomCapture | undefined, id: unknown): CapturedNode | undefined {
+  if (!capture || typeof id !== "number") return undefined;
+  return findNode(capture.root, id);
 }
 
-function looksCredential(el: PageElement | undefined): boolean {
-  if (!el) return false;
-  if (el.role === "password") return true;
-  if (el.attrs?.inputType === "password") return true;
-  const haystack = `${el.name} ${el.attrs?.inputType ?? ""}`;
-  return CREDENTIAL_PATTERNS.some((p) => p.test(haystack));
+/** The words a page uses for an element, for matching against risk patterns. */
+function describe(node: CapturedNode): string {
+  return [node.label, node.text, node.attrs.name, node.attrs.placeholder, node.attrs["aria-label"]]
+    .filter(Boolean)
+    .join(" ");
+}
+
+function looksCredential(node: CapturedNode | undefined): boolean {
+  if (!node) return false;
+  if (node.role === "password") return true;
+  if ((node.attrs.type ?? "").toLowerCase() === "password") return true;
+  return CREDENTIAL_PATTERNS.some((p) => p.test(`${describe(node)} ${node.attrs.type ?? ""}`));
 }
 
 /**
@@ -62,17 +70,17 @@ function looksCredential(el: PageElement | undefined): boolean {
  */
 export function gate(
   action: AgentAction,
-  snapshot: PageSnapshot | undefined,
+  capture: DomCapture | undefined,
   confirmRisky: boolean,
 ): Gate {
-  const el = elementOf(snapshot, action.input.element_id);
+  const el = elementOf(capture, action.input.element_id);
 
   if (action.name === "type") {
     if (looksCredential(el)) {
       return {
         verdict: "refuse",
         reason:
-          `Refusing to type into ${JSON.stringify(el?.name ?? "this field")} — it looks like a ` +
+          `Refusing to type into ${JSON.stringify(el ? describe(el).slice(0, 40) : "this field")} — it looks like a ` +
           `credential or payment field. Tell the user to fill it in themselves, then continue ` +
           `once they confirm they have.`,
       };
@@ -92,22 +100,24 @@ export function gate(
   if (!confirmRisky) return { verdict: "allow" };
 
   if (action.name === "click" && el) {
-    const label = `${el.name} ${el.role}`;
+    const label = `${describe(el)} ${el.role}`;
     if (IRREVERSIBLE_PATTERNS.some((p) => p.test(label))) {
       return {
         verdict: "confirm",
-        summary: `Click ${JSON.stringify(el.name)} on ${snapshot?.title ?? "this page"}?`,
+        summary: `Click ${JSON.stringify(describe(el).slice(0, 60))} on ${capture?.title ?? "this page"}?`,
       };
     }
   }
 
   if (action.name === "type" && action.input.submit === true && el) {
     // Submitting a form is only risky when the form is not obviously a search.
-    const isSearch = /search|query|find|filter/i.test(`${el.name} ${el.role}`);
+    const isSearch = /search|query|find|filter/i.test(`${describe(el)} ${el.role}`);
     if (!isSearch) {
       return {
         verdict: "confirm",
-        summary: `Fill ${JSON.stringify(el.name)} and submit the form on ${snapshot?.title ?? "this page"}?`,
+        summary:
+          `Fill ${JSON.stringify(describe(el).slice(0, 40))} and submit the form on ` +
+          `${capture?.title ?? "this page"}?`,
       };
     }
   }
@@ -126,9 +136,9 @@ const INJECTION_PATTERNS = [
   /\bdisregard\s+(your|the)\s+(instructions|rules)/i,
 ];
 
-export function detectInjection(snapshot: PageSnapshot): string | undefined {
-  const hit = INJECTION_PATTERNS.find((p) => p.test(snapshot.text));
+export function detectInjection(capture: DomCapture): string | undefined {
+  const text = allText(capture.root);
+  const hit = INJECTION_PATTERNS.find((p) => p.test(text));
   if (!hit) return undefined;
-  const match = snapshot.text.match(hit);
-  return match?.[0];
+  return text.match(hit)?.[0];
 }

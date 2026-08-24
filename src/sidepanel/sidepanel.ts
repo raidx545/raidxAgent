@@ -86,9 +86,12 @@ chrome.runtime.onMessage.addListener((event: AgentEvent) => {
       const node = nodes.get(event.id);
       if (!node) break;
       if (event.text !== undefined) {
-        if (node.classList.contains("assistant")) {
+        if (node.classList.contains("assistant") && !event.replace) {
           // Streamed prose arrives as deltas.
           node.textContent = (node.textContent ?? "") + event.text;
+        } else if (node.classList.contains("assistant")) {
+          // A replacement: the answer with real values put back.
+          node.textContent = event.text;
         } else if (node.classList.contains("step")) {
           node.querySelector(".detail")!.textContent = event.text;
         } else {
@@ -150,6 +153,16 @@ $("new-task").addEventListener("click", () => {
 });
 
 $("settings").addEventListener("click", () => chrome.runtime.openOptionsPage());
+
+// Exactly what left this browser, with a PII verdict per turn.
+$("wire").addEventListener("click", () => {
+  void chrome.tabs.create({ url: chrome.runtime.getURL("wirelog.html") });
+});
+
+// The capture + PII layer runs standalone; it does not involve the planner.
+$("inspect").addEventListener("click", () => {
+  void chrome.tabs.create({ url: chrome.runtime.getURL("inspector.html") });
+});
 
 inputEl.addEventListener("keydown", (event) => {
   if (event.key === "Enter" && !event.shiftKey) {

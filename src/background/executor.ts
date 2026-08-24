@@ -1,9 +1,6 @@
-import type {
-  ActionResult,
-  AgentAction,
-  ContentRequest,
-  PageSnapshot,
-} from "../shared/types";
+import type { ActionResult, AgentAction, ContentRequest } from "../shared/types";
+import type { DomCapture } from "../capture/types";
+import type { SpanRectRequest, SpanRectResult } from "../capture/spans";
 import { PAGE_ACTIONS } from "./tools";
 
 /** Tracks which tab the agent is currently driving. */
@@ -45,9 +42,36 @@ export class TabController {
     }
   }
 
-  async snapshot(): Promise<PageSnapshot | undefined> {
-    const result = await this.send({ kind: "snapshot" }).catch(() => undefined);
-    return result?.snapshot;
+  /** Prepares the page for a full-page capture and returns its dimensions. */
+  async fullPageBegin(): Promise<ActionResult["page"]> {
+    const result = await this.send({ kind: "fullpage-begin" }).catch(() => undefined);
+    return result?.page;
+  }
+
+  /** Scrolls to a document offset; reports where the page actually landed. */
+  async fullPageScroll(y: number, hideSticky: boolean): Promise<ActionResult["page"]> {
+    const result = await this.send({ kind: "fullpage-scroll", y, hideSticky }).catch(
+      () => undefined,
+    );
+    return result?.page;
+  }
+
+  /** Restores scroll position and anything that was hidden for the capture. */
+  async fullPageEnd(): Promise<void> {
+    await this.send({ kind: "fullpage-end" }).catch(() => undefined);
+  }
+
+  /** Asks the page where a batch of character spans is painted. */
+  async spanRects(requests: SpanRectRequest[]): Promise<SpanRectResult[]> {
+    if (requests.length === 0) return [];
+    const result = await this.send({ kind: "span-rects", requests }).catch(() => undefined);
+    return result?.rects ?? [];
+  }
+
+  /** The PII layer's structured capture. Read-only, no model involved. */
+  async captureDom(): Promise<DomCapture | undefined> {
+    const result = await this.send({ kind: "capture" }).catch(() => undefined);
+    return result?.capture;
   }
 
   async act(action: AgentAction): Promise<ActionResult> {

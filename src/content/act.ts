@@ -1,5 +1,5 @@
 import type { ActionResult, AgentAction } from "../shared/types";
-import { lookup, snapshot } from "./perceive";
+import { capturedElement, captureDom } from "../capture/dom";
 
 const fail = (detail: string): ActionResult => ({ ok: false, detail });
 const done = (detail: string): ActionResult => ({ ok: true, detail });
@@ -16,7 +16,7 @@ function describe(el: Element): string {
 function resolve(input: Record<string, unknown>): Element | string {
   const id = input.element_id;
   if (typeof id !== "number") return "element_id must be a number";
-  const el = lookup(id);
+  const el = capturedElement(id);
   if (!el) {
     return `No element ${id} on the current page. The page changed since the last read — call read_page and use the new ids.`;
   }
@@ -200,7 +200,7 @@ export async function act(action: AgentAction): Promise<ActionResult> {
       }
 
       case "read_page":
-        return { ok: true, detail: "Read the page.", snapshot: snapshot() };
+        return { ok: true, detail: "Read the page.", capture: captureDom() };
 
       default:
         return fail(`Action ${name} is not handled in the page context.`);

@@ -104,14 +104,31 @@ export function createOpenAIPlanner(
   return {
     label: `${label} ${model}`,
 
-    async run({ system, messages, tools, signal, onText }: PlannerRequest): Promise<PlannerTurn> {
+    async run({ system, messages, tools, signal, onText, image }: PlannerRequest): Promise<PlannerTurn> {
       let stream: Awaited<ReturnType<typeof client.chat.completions.create>>;
+
+      const built = toMessages(system, messages);
+
+      // Attach the screenshot to the newest user turn.
+      if (image) {
+        const last = built[built.length - 1];
+        if (last?.role === "user") {
+          const text = typeof last.content === "string" ? last.content : "";
+          built[built.length - 1] = {
+            role: "user",
+            content: [
+              { type: "image_url", image_url: { url: image } },
+              { type: "text", text },
+            ],
+          };
+        }
+      }
 
       try {
         stream = await client.chat.completions.create(
           {
             model,
-            messages: toMessages(system, messages),
+            messages: built,
             tools: toTools(tools),
             stream: true,
             // OpenAI renamed this for reasoning models; OpenRouter takes the

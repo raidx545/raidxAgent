@@ -52,6 +52,15 @@ export interface PlannerRequest {
   signal: AbortSignal;
   /** Called with each prose delta so the panel can stream. */
   onText: (delta: string) => void;
+  /**
+   * A PNG data URL attached to the newest user turn.
+   *
+   * This is always the *redacted* screenshot: faces destroyed, tokenized text
+   * painted over with the same token the tree carries. Sending the raw one
+   * would undo the tokenizing, since the picture would simply hand the values
+   * back - so nothing in this codebase passes an unsanitized image here.
+   */
+  image?: string;
 }
 
 export interface Planner {

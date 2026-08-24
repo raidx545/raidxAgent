@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>RAIDX PII Fixture — synthetic data only</title>
+<style>
+  body { font: 14px/1.6 ui-sans-serif, system-ui, sans-serif; max-width: 780px; margin: 40px auto; padding: 0 20px; color:#14171a; }
+  h1 { font-size: 20px; margin-bottom: 4px; }
+  .warn { background:#fff4e5; border-left:3px solid #f5a524; padding:10px 12px; margin:16px 0; }
+  fieldset { border:1px solid #ddd; border-radius:8px; margin:18px 0; padding:14px 16px; }
+  legend { font-weight:600; padding:0 6px; }
+  label { display:block; margin-top:10px; font-size:13px; font-weight:600; }
+  input, select { width:100%; padding:7px 9px; border:1px solid #ccc; border-radius:6px; font:inherit; margin-top:3px; }
+  .row { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+  .media { display:flex; gap:16px; align-items:flex-start; flex-wrap:wrap; margin-top:10px; }
+  .box { border:1px dashed #bbb; border-radius:6px; padding:8px; text-align:center; font-size:11px; color:#666; }
+  canvas, iframe { border:1px solid #ccc; border-radius:4px; display:block; }
+  address { font-style:normal; background:#f6f6f6; padding:6px 8px; border-radius:4px; display:inline-block; }
+  .decoy { color:#666; }
+</style>
+</head>
+<body>
+
+<h1>RAIDX capture &amp; PII detection fixture</h1>
+<p class="warn">
+  <strong>Every value on this page is synthetic.</strong> The identifiers are constructed to carry
+  valid checksums so the detector's tier-2 validators actually fire — they belong to no real person.
+  The decoy section holds look-alike values that must <em>not</em> be reported.
+</p>
+
+<!-- ============ TIER 1: the page declares what these fields hold ============ -->
+<fieldset>
+  <legend>Tier 1 — declared by the DOM</legend>
+
+  <label for="pw">Password</label>
+  <input id="pw" type="password" autocomplete="current-password" value="hunter2-not-real">
+
+  <label for="otp">One-time code</label>
+  <input id="otp" autocomplete="one-time-code" inputmode="numeric" value="482913">
+
+  <div class="row">
+    <div>
+      <label for="ccnum">Card number</label>
+      <input id="ccnum" autocomplete="cc-number" value="4111 1111 1111 1111">
+    </div>
+    <div>
+      <label for="cvv">CVV</label>
+      <input id="cvv" autocomplete="cc-csc" value="737">
+    </div>
+  </div>
+
+  <label for="email">Email address</label>
+  <input id="email" type="email" autocomplete="email" value="priya.sharma@example.in">
+
+  <label for="tel">Mobile</label>
+  <input id="tel" type="tel" autocomplete="tel" value="+91 98765 43210">
+
+  <label for="addr">Street address</label>
+  <input id="addr" autocomplete="address-line1" value="12 MG Road, Indiranagar">
+
+  <label for="bday">Date of birth</label>
+  <input id="bday" type="date" autocomplete="bday" value="1991-08-14">
+
+  <!-- Keyword-only signals: no autocomplete attribute, so these land at "high", not "certain" -->
+  <label for="aadhaar">Aadhaar Number</label>
+  <input id="aadhaar" name="aadhaar_no" value="345678901238">
+
+  <label for="pan">PAN Card Number</label>
+  <input id="pan" name="pan_card" value="AAACR5055K">
+</fieldset>
+
+<!-- ============ TIER 2: free text, pattern then checksum ============ -->
+<fieldset>
+  <legend>Tier 2 — free text, pattern + checksum</legend>
+  <p>
+    Invoice raised to <strong>Sharma Traders</strong>, GSTIN 27AAACR5055K1Z7, PAN AAACR5055K.
+  </p>
+  <p>
+    Remit to A/c 123456789012, IFSC SBIN0001234, or pay by UPI to priya@okhdfcbank.
+  </p>
+  <p>
+    Queries: priya.sharma@example.in or +91 98765 43210. Request logged from 192.168.10.44.
+  </p>
+  <p>
+    Applicant DOB: 14/08/1991. Passport A1234567. Vehicle KA01AB1234.
+  </p>
+</fieldset>
+
+<!-- ============ DECOYS: must NOT be reported ============ -->
+<fieldset>
+  <legend>Decoys — these must produce no findings</legend>
+  <p class="decoy">
+    Order reference 345678901234 — twelve digits, but the Verhoeff check digit is wrong,
+    so this is not an Aadhaar number.
+  </p>
+  <p class="decoy">
+    Card-shaped but Luhn-invalid: 4111 1111 1111 1112.
+  </p>
+  <p class="decoy">
+    PAN-shaped with an invalid holder-type character: AAAXR5055K.
+  </p>
+  <p class="decoy">
+    Epoch timestamps 1710000000000 and 1710000000001 — long digit runs with no
+    account cue nearby, so the bank-account rule must stay silent.
+  </p>
+  <p class="decoy">
+    Build number 5551234567 and version 9.8.7.6 — neither is a phone number or an IP.
+  </p>
+</fieldset>
+
+<!-- ============ TIER 3 TEXT: names, orgs, addresses ============ -->
+<fieldset>
+  <legend>Tier 3 (text) &mdash; entities with no checksum</legend>
+
+  <label for="fullname">Full Name</label>
+  <input id="fullname" autocomplete="name" value="Priya Sharma">
+
+  <p>
+    <strong>Priya Sharma</strong> raised this invoice. The gazetteer learns the name from the
+    labelled field above, then finds every other mention &mdash; including this one.
+  </p>
+  <p>Escalate to Dr. Anil Kumar Verma before Friday.</p>
+  <p>Dear Rajesh, your consignment has left the warehouse.</p>
+  <p>Billed to: Sharma Traders Pvt Ltd</p>
+  <p>Vendor: Verma Exports and Imports LLP handles the shipment.</p>
+  <address>42 MG Road, Indiranagar, Bengaluru, Karnataka 560038</address>
+  <p>Deliver to 17/B Nehru Nagar, Pune 411014, Maharashtra.</p>
+  <p class="decoy">
+    Decoys: Privacy Policy, Terms of Service, Total Amount Due, Order Summary,
+    Frequently Asked Questions, Account Settings &mdash; none of these are names.
+  </p>
+</fieldset>
+
+<!-- ============ OPAQUE REGION ============ -->
+<fieldset>
+  <legend>Unverifiable region</legend>
+  <p class="decoy">
+    A cross-origin frame paints into the screenshot but contributes nothing to the DOM tree,
+    so no text detector can see what is inside it. It is burned by default: we do not ship
+    pixels we were never able to inspect.
+  </p>
+  <iframe src="https://example.com" width="320" height="160" title="External embed"></iframe>
+</fieldset>
+
+<!-- ============ TIER 3: pixel-shaped ============ -->
+<fieldset>
+  <legend>Tier 3 — pixel-shaped, cannot be tokenized</legend>
+  <div class="media">
+    <div class="box">
+      <img id="avatar" alt="Profile photo of the applicant" width="72" height="72"
+           src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI3MiIgaGVpZ2h0PSI3MiI+PHJlY3Qgd2lkdGg9IjcyIiBoZWlnaHQ9IjcyIiBmaWxsPSIjYzdkMmZlIi8+PGNpcmNsZSBjeD0iMzYiIGN5PSIyNiIgcj0iMTMiIGZpbGw9IiM2MzY2ZjEiLz48cGF0aCBkPSJNMTAgNzJjMC0xNSAxMi0yNCAyNi0yNHMyNiA5IDI2IDI0eiIgZmlsbD0iIzYzNjZmMSIvPjwvc3ZnPg==">
+      <div>face_or_photo</div>
+    </div>
+
+    <div class="box">
+      <img id="idscan" alt="Aadhaar card scan" width="240" height="150"
+           src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNDAiIGhlaWdodD0iMTUwIj48cmVjdCB3aWR0aD0iMjQwIiBoZWlnaHQ9IjE1MCIgZmlsbD0iI2ZlZjNjNyIgc3Ryb2tlPSIjZDk3NzA2Ii8+PHRleHQgeD0iMTYiIHk9IjQwIiBmb250LWZhbWlseT0ic2Fucy1zZXJpZiIgZm9udC1zaXplPSIxNCIgZmlsbD0iIzkyNDAwZSI+U1lOVEhFVElDIElEIENBUkQ8L3RleHQ+PC9zdmc+">
+      <div>scanned_document</div>
+    </div>
+
+    <div class="box">
+      <canvas id="sigpad" aria-label="Signature pad" width="240" height="90"></canvas>
+      <div>signature</div>
+    </div>
+
+    <div class="box">
+      <img id="logo" alt="Company logo" width="120" height="40"
+           src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxMjAiIGhlaWdodD0iNDAiPjxyZWN0IHdpZHRoPSIxMjAiIGhlaWdodD0iNDAiIGZpbGw9IiNlNWU3ZWIiLz48L3N2Zz4=">
+      <div>logo — should stay silent</div>
+    </div>
+  </div>
+
+  <label for="docupload">Upload identity proof</label>
+  <input id="docupload" type="file" accept="image/*,application/pdf">
+</fieldset>
+
+<script>
+  // Draw a squiggle so the signature canvas has real pixels in the screenshot.
+  const c = document.getElementById("sigpad").getContext("2d");
+  c.strokeStyle = "#1f2937"; c.lineWidth = 2; c.lineJoin = "round"; c.beginPath();
+  c.moveTo(20, 60);
+  for (let x = 20; x < 220; x += 6) c.lineTo(x, 60 - Math.sin(x / 14) * 22 - (x / 40));
+  c.stroke();
+</script>
+
+</body>
+</html>

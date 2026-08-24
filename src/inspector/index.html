@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>RAIDX — Sanitization Inspector</title>
+    <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="inspector.css" />
+  </head>
+  <body class="inspector">
+    <header class="bar">
+      <div class="brand"><strong>Sanitization Inspector</strong></div>
+      <div class="bar-actions">
+        <select id="tab-picker" title="Tab to inspect"></select>
+        <label class="toggle" title="Scroll and stitch the whole scrollable page">
+          <input type="checkbox" id="full-page" checked />
+          Whole page
+        </label>
+        <button id="scan" class="primary">Scan tab</button>
+        <button id="clear-vault" class="ghost" title="Drop every token mapping">Clear vault</button>
+      </div>
+    </header>
+
+    <p class="notice">
+      Capture &rarr; detect &rarr; tokenize text &rarr; burn pixels. Nothing here is sent to a model —
+      this is what <em>would</em> cross the wire. Real values never leave this page and are shown
+      masked.
+    </p>
+
+    <div id="status" class="status"></div>
+
+    <section id="residual-banner" class="residual hidden"></section>
+    <section id="summary" class="summary hidden"></section>
+
+    <div class="split">
+      <section class="pane">
+        <div class="pane-head">
+          <h2>Screenshot</h2>
+          <div class="switch" id="shot-switch">
+            <button data-view="redacted" aria-pressed="true">Redacted</button>
+            <button data-view="original" aria-pressed="false">Original</button>
+          </div>
+        </div>
+        <div class="shot-wrap">
+          <canvas id="shot"></canvas>
+          <p id="shot-note" class="hint"></p>
+        </div>
+      </section>
+
+      <section class="pane">
+        <div class="pane-head">
+          <h2>Vault</h2>
+          <span class="hint" id="vault-note"></span>
+        </div>
+        <div id="vault" class="vault"></div>
+      </section>
+    </div>
+
+    <div class="split">
+      <section class="pane">
+        <div class="pane-head">
+          <h2>Findings</h2>
+          <div class="filters" id="filters"></div>
+        </div>
+        <div id="findings" class="findings"></div>
+      </section>
+
+      <section class="pane">
+        <div class="pane-head">
+          <h2>Text sent to the model</h2>
+          <div class="switch" id="text-switch">
+            <button data-view="after" aria-pressed="true">After</button>
+            <button data-view="before" aria-pressed="false">Before</button>
+          </div>
+        </div>
+        <div id="textview" class="textview"></div>
+      </section>
+    </div>
+
+    <section class="pane full">
+      <div class="pane-head">
+        <h2>DOM tree</h2>
+        <span class="hint" id="tree-stats"></span>
+      </div>
+      <div id="tree" class="tree"></div>
+    </section>
+
+    <script type="module" src="inspector.js"></script>
+  </body>
+</html>

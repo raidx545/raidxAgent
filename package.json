@@ -3,11 +3,12 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "RAIDX — an autonomous browser agent for Chrome",
+  "description": "RAIDX \u2014 an autonomous browser agent for Chrome",
   "scripts": {
     "build": "node build.mjs",
     "dev": "node build.mjs --watch",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node test/run.mjs"
   },
   "devDependencies": {
     "@types/chrome": "^0.0.287",

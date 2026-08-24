@@ -1,68 +1,49 @@
-import type {
-  AgentEvent,
-  PageSnapshot,
-  Settings,
-  TranscriptEntry,
-} from "../shared/types";
+import type { AgentEvent, Settings, TranscriptEntry } from "../shared/types";
+import type { Capture, DomCapture } from "../capture/types";
+import { walkCapture } from "../capture/dom";
+import { alignTask, renderPage } from "./wire";
 import { SYSTEM_PROMPT, taskPrompt } from "./prompt";
 import { TOOLS, PAGE_ACTIONS } from "./tools";
 import { TabController, execute, isRestricted } from "./executor";
+import { captureTab } from "./inspect";
 import { detectInjection, gate } from "./safety";
 import { createPlanner } from "./providers";
 import type { ConvMessage, ToolOutcome } from "./providers/types";
+import { sanitize, sanitizeText, type SanitizedCapture } from "../sanitize/sanitize";
+import { recordWire, tokensIn } from "./wirelog";
+import { scanText } from "../pii/detect";
+import type { RemoteVault } from "../vault/remote";
+import { remoteSource } from "../vault/remote";
+import type { SpanRectRequest, SpanRectResult } from "../capture/spans";
 
 let counter = 0;
 const nextId = () => `e${++counter}`;
 
-/** Compact page rendering. This is the only view of the page the model gets. */
-function renderSnapshot(snapshot: PageSnapshot): string {
-  const lines = snapshot.elements.map((el) => {
-    const parts = [`[${el.id}] ${el.role}`];
-    if (el.name) parts.push(JSON.stringify(el.name));
-    if (el.value) parts.push(`= ${JSON.stringify(el.value)}`);
-    const attrs = el.attrs
-      ? Object.entries(el.attrs)
-          .map(([k, v]) => `${k}=${v}`)
-          .join(" ")
-      : "";
-    if (attrs) parts.push(`(${attrs})`);
-    return parts.join(" ");
-  });
-
-  return [
-    `URL: ${snapshot.url}`,
-    `Title: ${snapshot.title}`,
-    `Scroll: ${snapshot.scroll.y} of ${snapshot.scroll.maxY}`,
-    "",
-    `Elements${snapshot.truncated ? " (list truncated — scroll for more)" : ""}:`,
-    ...lines,
-    "",
-    "Page text:",
-    snapshot.text,
-  ].join("\n");
-}
-
 export interface AgentDeps {
   settings: Settings;
   emit: (event: AgentEvent) => void;
-  /** Resolves true when the user approves a gated action. */
   askConfirm: (id: string, summary: string) => Promise<boolean>;
   signal: AbortSignal;
+  /** The session vault. Shared across turns so tokens stay stable. */
+  vault: RemoteVault;
 }
 
 /**
- * Runs one task to completion: perceive, plan, act, verify, repeat, until the
- * model stops calling tools or a limit is reached.
+ * Runs one task to completion: perceive, sanitize, plan, act, verify, repeat.
+ *
+ * The sanitization step is not optional and not a filter bolted on the end. The
+ * planner is never shown a raw page - `perceive` and `sanitize` are the same
+ * step from its point of view, and there is no code path that renders an
+ * unsanitized capture into a message.
  */
 export async function runTask(
   task: string,
   startTabId: number,
   deps: AgentDeps,
 ): Promise<void> {
-  const { settings, emit, askConfirm, signal } = deps;
+  const { settings, emit, askConfirm, signal, vault } = deps;
 
   const planner = createPlanner(settings);
-
   let controller = new TabController(startTabId);
   const tab = await chrome.tabs.get(startTabId);
 
@@ -80,31 +61,97 @@ export async function runTask(
 
   emit({
     kind: "entry",
-    entry: { id: nextId(), role: "system", text: `Using ${planner.label}.` },
+    entry: {
+      id: nextId(),
+      role: "system",
+      text: `Using ${planner.label}. Page content is tokenized before it leaves this browser.`,
+    },
   });
 
-  await controller.waitForLoad();
-  let snapshot = await controller.snapshot();
+  /** Ids the planner has actually been shown; anything else is not real. */
+  let issuedIds = new Set<number>();
+  let current: SanitizedCapture | undefined;
+
+  const perceive = async (): Promise<SanitizedCapture | undefined> => {
+    const raw = await captureTab(controller.tabId, { fullPage: settings.fullPageCapture });
+    if (!raw.dom) return undefined;
+
+    if (detectInjection(raw.dom)) {
+      warnInjected(raw.dom, emit);
+    }
+
+    const sanitized = await sanitizeCapture(raw, controller, vault);
+    issuedIds = new Set([...walkCapture(sanitized.dom.root)].map((n) => n.id));
+    current = sanitized;
+    return sanitized;
+  };
+
+  const first = await perceive();
+  if (!first) {
+    emit({
+      kind: "entry",
+      entry: { id: nextId(), role: "error", text: "The page did not respond to the capture." },
+    });
+    return;
+  }
+
+  reportSanitization(first, emit);
+
+  // The task is tokenized in the same vault as the page.
+  //
+  // Without this the whole scheme collapses: the planner would be told to
+  // "forward the invoice from Sharma Traders" while the page says <ORG_3>, and
+  // it could never connect the two. Tokens only work as join keys when both
+  // sides of the join go through the same vault.
+  // Two different jobs, in this order.
+  //
+  // Aligning replaces values the page already showed, so both sides of the
+  // join carry one token. Sanitizing then catches identifiers the user typed
+  // that the page never had - those have no token to align with, and they
+  // reach the model exactly like page content does.
+  const aligned = alignTask(task, await vault.knownValues());
+  const scanned = await sanitizeText(aligned, remoteSource(vault));
+  const tokenizedTask = scanned.text;
+
+  if (scanned.findings.length > 0) {
+    emit({
+      kind: "entry",
+      entry: {
+        id: nextId(),
+        role: "system",
+        text:
+          `Your request contained ${scanned.findings.length} value(s) worth protecting ` +
+          `(${[...new Set(scanned.findings.map((f) => f.kind))].join(", ")}). ` +
+          `They were tokenized before the request left this browser.`,
+      },
+    });
+  }
+
+  if (tokenizedTask !== task) {
+    emit({
+      kind: "entry",
+      entry: {
+        id: nextId(),
+        role: "system",
+        text: `Your request mentions details that are on the page; both now read the same token. The model sees: ${tokenizedTask}`,
+      },
+    });
+  }
 
   const messages: ConvMessage[] = [
     {
       role: "user",
       content:
-        taskPrompt(task, tab.url ?? "", tab.title ?? "") +
-        (snapshot ? `\n\n--- Current page ---\n${renderSnapshot(snapshot)}` : ""),
+        taskPrompt(tokenizedTask, first.dom.url, first.dom.title) +
+        `\n\n--- Current page ---\n${renderPage(first.dom)}`,
     },
   ];
-
-  if (snapshot) warnIfInjected(snapshot, emit);
 
   for (let step = 0; step < settings.maxSteps; step++) {
     if (signal.aborted) return;
 
-    // Stream so the user sees reasoning as it arrives rather than staring at a
-    // spinner for the length of a long turn.
     const entryId = nextId();
     let opened = false;
-
     const onText = (delta: string): void => {
       if (!opened) {
         opened = true;
@@ -114,6 +161,49 @@ export async function runTask(
       }
     };
 
+    // Record what is about to leave, and check it one more time.
+    //
+    // Everything upstream has already sanitized this. Scanning again here is
+    // the point: it is the last moment before the bytes go, it runs on the real
+    // page rather than a fixture, and if it ever finds something the user is
+    // told immediately rather than after the fact.
+    const outgoing = messages
+      .map((m) =>
+        m.role === "user"
+          ? { role: "user", text: m.content }
+          : m.role === "assistant"
+            ? { role: "assistant", text: m.text || "(tool calls only)" }
+            : { role: "tool", text: m.results.map((r) => r.content).join("\n---\n") },
+      );
+    const wireText = outgoing.map((m) => m.text).join("\n");
+    const leaked = await scanText(wireText);
+    const image = settings.sendScreenshot ? current?.screenshot?.dataUrl : undefined;
+
+    recordWire({
+      turn: step + 1,
+      destination: planner.label,
+      systemChars: SYSTEM_PROMPT.length,
+      messages: outgoing,
+      image: image ? { dataUrl: image, bytes: image.length } : undefined,
+      tokens: tokensIn(wireText),
+      leaked,
+      totalChars: SYSTEM_PROMPT.length + wireText.length,
+    });
+
+    if (leaked.length > 0) {
+      emit({
+        kind: "entry",
+        entry: {
+          id: nextId(),
+          role: "error",
+          text:
+            `⚠ ${leaked.length} value(s) reached the outgoing payload unsanitized ` +
+            `(${[...new Set(leaked.map((f) => f.kind))].join(", ")}). ` +
+            `Open the wire log to see exactly what was sent.`,
+        },
+      });
+    }
+
     let turn;
     try {
       turn = await planner.run({
@@ -122,6 +212,9 @@ export async function runTask(
         tools: TOOLS,
         signal,
         onText,
+        // The redacted screenshot, when there is one. Faces are destroyed and
+        // tokenized text is painted over with the same token the tree uses.
+        image,
       });
     } catch (error) {
       if (signal.aborted) return;
@@ -150,17 +243,18 @@ export async function runTask(
       return;
     }
 
-    // No tools left to call — the model has given its final answer.
-    if (turn.toolCalls.length === 0) return;
+    if (turn.toolCalls.length === 0) {
+      // The final answer may name tokens; the user should see real values.
+      if (turn.text) await revealForUser(turn.text, entryId, vault, emit);
+      return;
+    }
 
     const results: ToolOutcome[] = [];
 
     for (const call of turn.toolCalls) {
       if (signal.aborted) return;
 
-      const action = { name: call.name as never, input: call.input };
       const stepId = nextId();
-
       emit({
         kind: "entry",
         entry: {
@@ -172,7 +266,20 @@ export async function runTask(
         },
       });
 
-      const decision = gate(action, snapshot, settings.confirmRisky);
+      // -- 1. the element must be one we actually showed it -----------------
+      const targeted = call.input.element_id;
+      if (typeof targeted === "number" && !issuedIds.has(targeted)) {
+        const reason =
+          `There is no element ${targeted} on this page. Element ids are only valid ` +
+          `for the most recent page read — call read_page and use the new ids.`;
+        emit({ kind: "patch", id: stepId, text: `Rejected — ${reason}`, pending: false });
+        results.push({ id: call.id, content: reason, isError: true });
+        continue;
+      }
+
+      // -- 2. the safety gate, against the page the model was shown ---------
+      const action = { name: call.name as never, input: call.input };
+      const decision = gate(action, current?.dom, settings.confirmRisky);
 
       if (decision.verdict === "refuse") {
         emit({ kind: "patch", id: stepId, text: `Blocked — ${decision.reason}`, pending: false });
@@ -194,28 +301,44 @@ export async function runTask(
         }
       }
 
-      const outcome = await execute(controller, action);
+      // -- 3. resolve tokens, at the last possible moment -------------------
+      const resolved = await resolveInputs(call.input, vault);
+      if (resolved.unknown.length > 0) {
+        const reason =
+          `Refusing: ${resolved.unknown.join(", ")} ${resolved.unknown.length === 1 ? "is" : "are"} ` +
+          `not a token this browser issued. Only use tokens exactly as they appear on the page.`;
+        emit({ kind: "patch", id: stepId, text: `Blocked — ${reason}`, pending: false });
+        results.push({ id: call.id, content: reason, isError: true });
+        continue;
+      }
+      if (resolved.sealed.length > 0) {
+        const reason =
+          `${resolved.sealed.join(", ")} stands for a value this browser deliberately never read, ` +
+          `such as a password. There is nothing behind it. Ask the user to fill that field themselves.`;
+        emit({ kind: "patch", id: stepId, text: `Blocked — ${reason}`, pending: false });
+        results.push({ id: call.id, content: reason, isError: true });
+        continue;
+      }
+
+      const outcome = await execute(controller, { name: call.name as never, input: resolved.input });
       controller = outcome.controller;
       const { result } = outcome;
 
       emit({ kind: "patch", id: stepId, text: result.detail, pending: false });
 
-      // Verify: re-perceive after anything that could have changed the page, so
-      // the next turn plans against reality instead of against stale ids.
+      // -- 4. verify: re-perceive, sanitized, so ids stay in step -----------
       let observation = result.detail;
       const mayHaveChanged = PAGE_ACTIONS.has(call.name)
         ? call.name !== "find_text" && call.name !== "wait"
         : true;
 
       if (mayHaveChanged) {
-        const fresh = result.snapshot ?? (await controller.snapshot());
+        const fresh = await perceive();
         if (fresh) {
-          const navigated = snapshot && fresh.url !== snapshot.url;
-          snapshot = fresh;
-          warnIfInjected(fresh, emit);
+          const navigated = fresh.dom.url !== current?.dom.url;
           observation +=
             (navigated ? "\n\nThe page navigated." : "") +
-            `\n\n--- Page after this action ---\n${renderSnapshot(fresh)}`;
+            `\n\n--- Page after this action ---\n${renderPage(fresh.dom)}`;
         }
       }
 
@@ -235,9 +358,72 @@ export async function runTask(
   });
 }
 
+/** Runs the sanitizer, wiring rect resolution back to the page. */
+async function sanitizeCapture(
+  raw: Capture,
+  controller: TabController,
+  vault: RemoteVault,
+): Promise<SanitizedCapture> {
+  const resolveRects = (requests: SpanRectRequest[]): Promise<SpanRectResult[]> =>
+    controller.spanRects(requests);
+
+  return sanitize(raw, remoteSource(vault), undefined, resolveRects);
+}
+
+/** Swaps tokens back for real values in every string the planner supplied. */
+async function resolveInputs(
+  input: Record<string, unknown>,
+  vault: RemoteVault,
+): Promise<{ input: Record<string, unknown>; unknown: string[]; sealed: string[] }> {
+  const out: Record<string, unknown> = {};
+  const unknown: string[] = [];
+  const sealed: string[] = [];
+
+  for (const [key, value] of Object.entries(input)) {
+    if (typeof value !== "string" || !value.includes("<")) {
+      out[key] = value;
+      continue;
+    }
+    const result = await vault.resolve(value);
+    out[key] = result.text;
+    unknown.push(...result.unknown);
+    sealed.push(...result.sealed);
+  }
+
+  return { input: out, unknown: [...new Set(unknown)], sealed: [...new Set(sealed)] };
+}
+
+/** Puts real values back into the answer shown to the user. */
+async function revealForUser(
+  text: string,
+  entryId: string,
+  vault: RemoteVault,
+  emit: (event: AgentEvent) => void,
+): Promise<void> {
+  if (!text.includes("<")) return;
+  const { text: revealed } = await vault.resolve(text);
+  if (revealed !== text) {
+    emit({ kind: "patch", id: entryId, text: revealed, replace: true });
+  }
+}
+
+function reportSanitization(capture: SanitizedCapture, emit: (e: AgentEvent) => void): void {
+  const r = capture.report;
+  const swapped = r.tokenize.spansReplaced + r.tokenize.fieldsReplaced;
+  const bits = [`${swapped} value(s) tokenized`, `${r.tokenize.fieldsSealed} sealed`];
+  if (r.redact.regionsBurned > 0) bits.push(`${r.redact.regionsBurned} image region(s) destroyed`);
+  if (r.redact.textSpansCovered > 0) {
+    bits.push(`${r.redact.textSpansCovered} text span(s) painted over in the screenshot`);
+  }
+  if (r.residual.length > 0) {
+    bits.push(`⚠ ${r.residual.length} finding(s) survived sanitization`);
+  }
+  emit({ kind: "entry", entry: { id: nextId(), role: "system", text: bits.join(" · ") } });
+}
+
 let lastWarned = "";
-function warnIfInjected(snapshot: PageSnapshot, emit: (e: AgentEvent) => void): void {
-  const found = detectInjection(snapshot);
+function warnInjected(capture: DomCapture, emit: (e: AgentEvent) => void): void {
+  const found = detectInjection(capture);
   if (!found || found === lastWarned) return;
   lastWarned = found;
   emit({

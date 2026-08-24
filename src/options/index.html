@@ -75,6 +75,25 @@
       payment fields are always refused, whether or not this is on.
     </p>
 
+    <div class="row">
+      <input id="sendScreenshot" type="checkbox" />
+      <label for="sendScreenshot">Send the redacted screenshot to the model</label>
+    </div>
+    <p class="hint">
+      Gives the model a picture of the page as well as its structure, which helps it understand
+      layout. Faces are destroyed and tokenized text is painted over with the same token the text
+      view uses, so the image can never contradict it. Costs image tokens on every step.
+    </p>
+
+    <div class="row">
+      <input id="fullPageCapture" type="checkbox" />
+      <label for="fullPageCapture">Capture the whole page, not just the viewport</label>
+    </div>
+    <p class="hint">
+      More complete, but scrolls the tab and adds about half a second per screen &mdash; on every
+      step of every task. Leave off unless content below the fold matters.
+    </p>
+
     <footer>
       <button id="save" class="primary">Save</button>
       <span id="saved"></span>

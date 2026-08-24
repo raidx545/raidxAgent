@@ -14,6 +14,8 @@ const modelList = $<HTMLDataListElement>("model-list");
 const modelStatus = $("model-status");
 const maxStepsEl = $<HTMLInputElement>("maxSteps");
 const confirmRiskyEl = $<HTMLInputElement>("confirmRisky");
+const sendScreenshotEl = $<HTMLInputElement>("sendScreenshot");
+const fullPageCaptureEl = $<HTMLInputElement>("fullPageCapture");
 const refreshBtn = $<HTMLButtonElement>("refresh-models");
 const savedEl = $("saved");
 
@@ -61,6 +63,8 @@ function render(): void {
   modelEl.value = settings.models[provider.id] ?? provider.defaultModel;
   maxStepsEl.value = String(settings.maxSteps);
   confirmRiskyEl.checked = settings.confirmRisky;
+  sendScreenshotEl.checked = settings.sendScreenshot;
+  fullPageCaptureEl.checked = settings.fullPageCapture;
 
   renderModelOptions();
 }
@@ -103,6 +107,8 @@ $("save").addEventListener("click", async () => {
   captureVisibleFields();
   settings.maxSteps = Math.min(200, Math.max(5, Number(maxStepsEl.value) || 40));
   settings.confirmRisky = confirmRiskyEl.checked;
+  settings.sendScreenshot = sendScreenshotEl.checked;
+  settings.fullPageCapture = fullPageCaptureEl.checked;
 
   if (!settings.apiKeys[settings.provider]) {
     savedEl.className = "bad";

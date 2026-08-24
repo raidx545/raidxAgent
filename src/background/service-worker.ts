@@ -6,6 +6,10 @@ import type {
 } from "../shared/types";
 import { normaliseSettings } from "../shared/types";
 import { runTask } from "./agent";
+import { captureTab } from "./inspect";
+import { RemoteVault } from "../vault/remote";
+import { wireRecords, clearWire } from "./wirelog";
+import { TabController } from "./executor";
 
 // The side panel can be closed and reopened mid-run, so the transcript lives
 // here rather than in the panel's own memory.
@@ -14,6 +18,15 @@ let running = false;
 let abort: AbortController | null = null;
 
 const pendingConfirms = new Map<string, (approved: boolean) => void>();
+
+/**
+ * The session vault.
+ *
+ * It is a handle, not the mappings themselves - those live in an offscreen
+ * document that Chrome does not terminate on the service worker's idle timer.
+ * This worker can be torn down and restarted without losing a single token.
+ */
+const vault = new RemoteVault();
 
 chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => undefined);
 
@@ -29,9 +42,10 @@ function emit(event: AgentEvent): void {
   } else if (event.kind === "patch") {
     const entry = transcript.find((e) => e.id === event.id);
     if (entry) {
-      // Text deltas append; step updates replace.
+      // Text deltas append; step updates and explicit replacements overwrite.
       if (event.text !== undefined) {
-        entry.text = entry.role === "assistant" ? entry.text + event.text : event.text;
+        entry.text =
+          entry.role === "assistant" && !event.replace ? entry.text + event.text : event.text;
       }
       if (event.pending !== undefined) entry.pending = event.pending;
     }
@@ -57,7 +71,7 @@ async function start(task: string, tabId: number): Promise<void> {
   emit({ kind: "entry", entry: { id: `u-${Date.now()}`, role: "user", text: task } });
 
   try {
-    await runTask(task, tabId, { settings, emit, askConfirm, signal: abort.signal });
+    await runTask(task, tabId, { settings, emit, askConfirm, signal: abort.signal, vault });
   } catch (error) {
     emit({
       kind: "entry",
@@ -102,6 +116,10 @@ chrome.runtime.onMessage.addListener(
         abort?.abort();
         transcript = [];
         running = false;
+        // A new task is a new session. Keeping the old mappings would let a
+        // token minted on one site resolve while working on another.
+        void vault.clear();
+        clearWire();
         sendResponse({ ok: true });
         return false;
 
@@ -112,6 +130,98 @@ chrome.runtime.onMessage.addListener(
         sendResponse({ ok: true });
         return false;
       }
+
+      case "inspect": {
+        const tabId = command.tabId;
+        void (async () => {
+          try {
+            const target =
+              tabId ??
+              (await chrome.tabs.query({ active: true, currentWindow: true }))[0]?.id;
+            if (!target) throw new Error("No tab to inspect.");
+            sendResponse({
+              ok: true,
+              capture: await captureTab(target, { fullPage: command.fullPage === true }),
+            });
+          } catch (error) {
+            sendResponse({
+              ok: false,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+        })();
+        // Async response — keep the channel open.
+        return true;
+      }
+
+      case "vault-mint": {
+        void (async () => {
+          try {
+            const { tokens, size } = await vault.mint(command.requests);
+            sendResponse({ ok: true, tokens, size, hosting: vault.hosting });
+          } catch (error) {
+            sendResponse({
+              ok: false,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+        })();
+        return true;
+      }
+
+      case "vault-view": {
+        void (async () => {
+          const view = await vault.view();
+          sendResponse({ ok: true, ...view, hosting: vault.hosting });
+        })();
+        return true;
+      }
+
+      case "vault-clear": {
+        void (async () => {
+          await vault.clear();
+          sendResponse({ ok: true });
+        })();
+        return true;
+      }
+
+      case "vault-resolve": {
+        void (async () => {
+          try {
+            sendResponse({ ok: true, ...(await vault.resolve(command.text)) });
+          } catch (error) {
+            sendResponse({
+              ok: false,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+        })();
+        return true;
+      }
+
+      case "span-rects": {
+        void (async () => {
+          try {
+            const controller = new TabController(command.tabId);
+            sendResponse({ ok: true, rects: await controller.spanRects(command.requests) });
+          } catch (error) {
+            sendResponse({
+              ok: false,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+        })();
+        return true;
+      }
+
+      case "wire-log":
+        sendResponse({ ok: true, records: wireRecords() });
+        return false;
+
+      case "wire-clear":
+        clearWire();
+        sendResponse({ ok: true });
+        return false;
 
       case "get-state":
         sendResponse({ transcript, running });
