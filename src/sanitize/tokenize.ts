@@ -57,6 +57,7 @@ const REWRITABLE: Field[] = [
   "attr:data-email",
   "attr:data-hovercard-id",
   "attr:name",
+  "attr:aria-label",
 ];
 
 interface Plan {

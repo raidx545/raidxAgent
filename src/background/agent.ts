@@ -393,7 +393,18 @@ async function resolveInputs(
   return { input: out, unknown: [...new Set(unknown)], sealed: [...new Set(sealed)] };
 }
 
-/** Puts real values back into the answer shown to the user. */
+/**
+ * Puts real values back into the answer shown to the user.
+ *
+ * Three kinds of placeholder can appear, and they need different endings:
+ *
+ *   a token this vault issued  -> the real value, which is the whole point
+ *   a sealed token             -> there is no value; say so in words, because
+ *                                 "<SECRET_10>" on screen reads as a bug
+ *   a token we never issued    -> the model invented it; flag it rather than
+ *                                 quietly leaving it, since an invented
+ *                                 placeholder means an invented claim
+ */
 async function revealForUser(
   text: string,
   entryId: string,
@@ -401,9 +412,32 @@ async function revealForUser(
   emit: (event: AgentEvent) => void,
 ): Promise<void> {
   if (!text.includes("<")) return;
-  const { text: revealed } = await vault.resolve(text);
-  if (revealed !== text) {
-    emit({ kind: "patch", id: entryId, text: revealed, replace: true });
+
+  const { text: resolved, unknown, sealed } = await vault.resolve(text);
+
+  let shown = resolved;
+  for (const token of sealed) {
+    shown = shown.split(token).join("(not captured — you would need to enter this yourself)");
+  }
+  for (const token of unknown) {
+    shown = shown.split(token).join("(unrecognised placeholder)");
+  }
+
+  if (shown !== text) {
+    emit({ kind: "patch", id: entryId, text: shown, replace: true });
+  }
+
+  if (unknown.length > 0) {
+    emit({
+      kind: "entry",
+      entry: {
+        id: nextId(),
+        role: "system",
+        text:
+          `The answer referred to ${unknown.join(", ")}, which this browser never issued. ` +
+          `That part of the answer is not backed by anything on the page — treat it with suspicion.`,
+      },
+    });
   }
 }
 

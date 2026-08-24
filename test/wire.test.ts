@@ -56,6 +56,16 @@ function build(): Capture {
         attrs: { autocomplete: "name" }, value: "Priya Sharma" }),
     n({ tag: "input", role: "textbox", label: "Email",
         attrs: { type: "email" }, value: "priya.sharma@example.in" }),
+    // A field whose *label* repeats its own value. Ordinary markup, and the
+    // shape that leaked: tier 1 covers the value, so a node-keyed suppression
+    // threw away tier 2's finding on the label and shipped the raw number.
+    n({ tag: "input", role: "textbox", label: "+91 98765 43210",
+        attrs: { type: "tel" }, value: "+91 98765 43210" }),
+    // Same shape again, with an identifier that has a checksum.
+    n({ tag: "input", role: "textbox", label: `Aadhaar ${AADHAAR}`,
+        attrs: { name: "aadhaar_no" }, value: AADHAAR }),
+    n({ tag: "span", role: "generic", text: "Linked mobile",
+        attrs: { "aria-label": "Mobile +91 98765 43210" } }),
     n({ tag: "p", text: `Invoice for Sharma Traders Pvt Ltd. PAN AAACR5055K, Aadhaar ${AADHAAR}.` }),
     n({ tag: "p", text: "Remit to IFSC SBIN0001234, or call +91 98765 43210." }),
     n({ tag: "p", text: "Ship to 17/B Nehru Nagar, Pune 411014." }),
@@ -91,6 +101,12 @@ for (const secret of SECRETS) {
   if (wire.includes(secret)) fails.push(`LEAK: "${secret}" is in what the model receives`);
 }
 want(!wire.includes("invoice/8871"), "the URL path survived; it named the customer");
+
+// The label of a field must be sanitized as thoroughly as its value. Seeing
+// `textbox "+91 98765 43210" = "<PHONE_1>"` in a payload means the tokenizing
+// achieved nothing for that field.
+want(!/textbox "\+91/.test(wire), `a field label still shows the raw value: ${wire.match(/.*\+91.*/)?.[0]}`);
+want(!wire.includes("aria-label"), "aria-label leaked into the payload unscanned");
 want(wire.includes("URL: https://billing.example.in"), `the origin was lost: ${wire.slice(0, 80)}`);
 want(sanitized.report.residual.length === 0,
   `residual: ${sanitized.report.residual.map((f) => f.kind).join(", ")}`);

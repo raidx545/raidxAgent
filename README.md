@@ -444,12 +444,66 @@ knows a photo is there, can refer to it, and never sees a pixel of it.
 It **fails closed**: any error returns no screenshot at all, because an
 unredacted screenshot is never an acceptable fallback.
 
+### Suppression is keyed on node *and* field
+
+A tier-1 finding means we already know what a field holds, so re-reporting the
+same value from tier 2 is noise. That suppression must be keyed on the node
+**and the field**, and briefly was not.
+
+An input's label frequently repeats its own value — `+91 98765 43210` as the
+label of a `type=tel` field is ordinary markup. Suppressing by node alone threw
+away the label finding and produced this in a real payload:
+
+```
+[45] textbox "+91 98765 43210" = "<PHONE_1>"
+```
+
+The raw number sitting next to its own token: worse than never tokenizing,
+because it looks protected. Now both read `<PHONE_1>`.
+
 ### Checking our own work
 
 `sanitize()` re-runs the detector over its own output and reports what survived
 as `residual`. Tier-1 findings are excluded — field metadata is *supposed* to
 survive — so a non-zero residual means a real value got through. The inspector
 shows this as a banner, and the test asserts it is zero.
+
+## The planner is told what placeholders are
+
+Early runs produced answers like *"the Aadhaar number is masked, so I can't see
+the actual number."* The system prompt never mentioned placeholders at all, so
+the model treated `<AADHAAR_1>` as damage rather than as a handle.
+
+The fix that mattered was not explaining the mechanism better — it was telling
+the planner **not to explain it to the user**. Narrating the substitution is
+noise at best, and false at worst: calling a number "redacted" when the user is
+about to read that exact number on their own screen is simply wrong.
+
+The prompt now says: a placeholder *is* the value, quote it inline, and never
+write "redacted", "masked", "I can't see", or a parenthetical about what was
+substituted. Good and bad phrasings are shown side by side, which works better
+than a rule.
+
+It also separates two things that look alike and are not:
+
+| The page shows | Meaning | What to answer |
+|---|---|---|
+| `textbox "XXXX XXXX XXXX" = "<AADHAAR_1>"` | the page masks its own display; the value is in the placeholder | `<AADHAAR_1>` |
+| `"•••• 4242"` with no placeholder | the full value is genuinely not on this page | report the mask as shown, invent nothing |
+
+An earlier version of this section caused the bug it was meant to prevent: it
+said "if a page shows a partly masked number, report exactly what is shown",
+which told the planner to answer `XXXX XXXX XXXX` while a placeholder holding
+the real value sat next to it.
+
+`<SECRET_n>` is called out separately: there is genuinely nothing behind it, so
+it must never be used in an action.
+
+Coming back the other way, an answer can contain three kinds of placeholder and
+they get different endings: an issued token becomes its real value, a sealed one
+becomes *"(not captured — you would need to enter this yourself)"* rather than
+raw `<SECRET_10>`, and one the vault never issued is flagged loudly — an
+invented placeholder means an invented claim.
 
 ## Seeing what the model got
 

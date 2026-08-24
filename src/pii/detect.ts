@@ -17,19 +17,28 @@ export type { ImageClassifier, ImageVerdict } from "./tier3-pixels";
 const DETECTORS = [tier1DomSignals, tier2Patterns, tier3Entities, tier3Pixels];
 
 /**
- * A tier-1 finding on a field means we already know what that field holds.
- * Re-reporting the same span from tier 2 adds noise, not information — this is
- * the "escalate only the residue" rule made concrete.
+ * A tier-1 finding means we already know what that field holds, so re-reporting
+ * the same value from tier 2 adds noise rather than information.
+ *
+ * Keyed on node *and field*, which is the whole correctness of it. Tier 1 fires
+ * on an input's value; the very same node's label often repeats the value in
+ * plain text - "+91 98765 43210" as the label of a tel field is ordinary
+ * markup. Suppressing by node alone threw away the label finding and shipped
+ * the raw number to the model with a token sitting next to it, which is worse
+ * than never having tokenized at all.
  */
 function suppressCovered(findings: Finding[]): Finding[] {
-  const coveredNodes = new Set(
-    findings.filter((f) => f.tier === 1 && f.confidence === "certain").map((f) => f.nodeId),
+  const covered = new Set(
+    findings
+      .filter((f) => f.tier === 1 && f.confidence === "certain" && f.field)
+      .map((f) => `${f.nodeId} ${f.field}`),
   );
 
   return findings.filter((finding) => {
     if (finding.tier !== 2) return true;
-    if (!coveredNodes.has(finding.nodeId)) return true;
-    // Keep it only if it names the data more precisely than tier 1 could.
+    if (!finding.field) return true;
+    if (!covered.has(`${finding.nodeId} ${finding.field}`)) return true;
+    // Same node, same field: keep it only if it names the data more precisely.
     return finding.confidence === "certain";
   });
 }

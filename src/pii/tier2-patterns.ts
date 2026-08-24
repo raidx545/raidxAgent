@@ -146,6 +146,7 @@ const SCANNED_FIELDS: Field[] = [
   "attr:data-email",
   "attr:data-hovercard-id",
   "attr:name",
+  "attr:aria-label",
 ];
 
 let seq = 0;
