@@ -106,7 +106,7 @@ export function createOpenAIPlanner(
     defaultHeaders:
       provider === "openrouter"
         ? // OpenRouter attributes traffic with these; both are optional.
-          { "HTTP-Referer": "https://github.com/raidx/raidx-agent", "X-Title": "RAIDX Agent" }
+          { "HTTP-Referer": "https://github.com/vless/vless-agent", "X-Title": "VLESS Agent" }
         : undefined,
   });
 

@@ -108,7 +108,7 @@ async function buildSelfTest() {
     "dist/selftest.html",
     `<!doctype html>
 <html lang="en">
-<head><meta charset="utf-8"><title>RAIDX sanitization self-test</title></head>
+<head><meta charset="utf-8"><title>VLESS sanitization self-test</title></head>
 <body><p>Running…</p><script>${js}</script></body>
 </html>`,
   );
@@ -136,7 +136,7 @@ async function buildOcrCheck() {
     "dist/ocr-check.html",
     `<!doctype html>
 <html lang="en">
-<head><meta charset="utf-8"><title>RAIDX OCR check</title></head>
+<head><meta charset="utf-8"><title>VLESS OCR check</title></head>
 <body><p>Running OCR…</p><script>${bundle.outputFiles[0].text}</script></body>
 </html>`,
   );
@@ -168,7 +168,7 @@ async function buildPanelPreview() {
       '<script type="module" src="sidepanel.js"></script>',
       `<script>${bundle.outputFiles[0].text}</script>`,
     )
-    .replace("<title>RAIDX Agent</title>", "<title>RAIDX panel preview</title>");
+    .replace("<title>VLESS Agent</title>", "<title>VLESS panel preview</title>");
 
   await writeFile("dist/panel-preview.html", shell);
 }

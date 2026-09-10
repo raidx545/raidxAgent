@@ -16,7 +16,7 @@ const run = promisify(execFile);
  */
 
 const dir = new URL(".", import.meta.url).pathname;
-const out = await mkdtemp(join(tmpdir(), "raidx-test-"));
+const out = await mkdtemp(join(tmpdir(), "vless-test-"));
 
 const files = (await readdir(dir)).filter((f) => f.endsWith(".test.ts")).sort();
 

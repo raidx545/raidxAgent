@@ -3,8 +3,8 @@ import { capturedElement, captureDom, lastCapture, walkCapture } from "../captur
 import { scrollByPixels } from "../capture/scroller";
 import { CLICK_START, settle } from "./settle";
 
-const fail = (detail: string): ActionResult => ({ ok: false, detail });
-const done = (detail: string): ActionResult => ({ ok: true, detail });
+const fail = (detail: string, summary?: string): ActionResult => ({ ok: false, detail, summary });
+const done = (detail: string, summary?: string): ActionResult => ({ ok: true, detail, summary });
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -70,6 +70,39 @@ function describeKey(c: KeyCombo): string {
 function describe(el: Element): string {
   const name = (el as HTMLElement).innerText?.trim().slice(0, 60);
   return `<${el.tagName.toLowerCase()}${name ? ` "${name}"` : ""}>`;
+}
+
+/**
+ * What a person would call this element.
+ *
+ * `describe` answers the model - a tag name and whatever text is inside, which
+ * on a real page is often four merged labels and reads like a stack trace. A
+ * viewer needs the name on the control and the kind of thing it is.
+ */
+function humanName(el: Element): string {
+  const tag = el.tagName.toLowerCase();
+  const kind =
+    tag === "a" ? "link"
+    : tag === "button" ? "button"
+    : tag === "select" ? "dropdown"
+    : tag === "textarea" || tag === "input" ? "field"
+    : el.getAttribute("role") === "button" ? "button"
+    : "";
+
+  const inner = (el as HTMLElement).innerText?.trim().replace(/\s+/g, " ") ?? "";
+  const name = (
+    el.getAttribute("aria-label")?.trim() ||
+    // Long inner text means the element wraps half the page, not that it is
+    // called that; a control's own name is short.
+    (inner.length > 0 && inner.length <= 40 ? inner : "") ||
+    (el as HTMLInputElement).placeholder?.trim() ||
+    el.getAttribute("title")?.trim() ||
+    ""
+  ).replace(/\s+/g, " ").slice(0, 40);
+
+  if (name && kind) return `the "${name}" ${kind}`;
+  if (name) return `"${name}"`;
+  return kind ? `a ${kind}` : "that element";
 }
 
 function resolve(input: Record<string, unknown>): Element | string {
@@ -165,7 +198,8 @@ async function typeInto(el: Element, text: string, submit: boolean): Promise<Act
       }));
     }
   } else {
-    return fail(`${describe(el)} is not a text field.`);
+    return fail(`${describe(el)} is not a text field.`,
+      `${humanName(el)} is not something you can type into.`);
   }
 
   if (submit) {
@@ -196,6 +230,9 @@ async function typeInto(el: Element, text: string, submit: boolean): Promise<Act
   // (tokenized) value in the next page read.
   return done(
     `Typed ${text.length} character(s) into ${describe(el)}${submit ? " and pressed Enter" : ""}.`,
+    // The text itself is deliberately never echoed - see the note above - so
+    // the sentence names the field rather than what went into it.
+    `Filled in ${humanName(el)}${submit ? " and pressed Enter" : ""}.`,
   );
 }
 
@@ -248,10 +285,16 @@ function findText(query: string): ActionResult {
       `Nothing on this page matches ${JSON.stringify(query)} — not in any label, value, ` +
         `placeholder or visible text. The element may not exist yet, or may be inside a ` +
         `frame this extension cannot read.`,
+      `Nothing on this page matches "${query}".`,
     );
   }
 
-  return done(`Found ${hits.length} match(es). Act on these by id:\n${hits.join("\n")}`);
+  // The id list is the whole point of this result for the planner, and noise
+  // for anyone watching.
+  return done(
+    `Found ${hits.length} match(es). Act on these by id:\n${hits.join("\n")}`,
+    `Found ${hits.length} match${hits.length === 1 ? "" : "es"} for "${query}".`,
+  );
 }
 
 /** Executes one action in the page. Never throws — errors come back as results. */
@@ -282,7 +325,11 @@ export async function act(action: AgentAction): Promise<ActionResult> {
           : changed
             ? " The page changed."
             : "";
-        return done(`Clicked ${describe(el)}.${note}`);
+        return done(
+          `Clicked ${describe(el)}.${note}`,
+          `Clicked ${humanName(el)}.` +
+            (opened.length > 0 ? ` ${opened[0]} opened.` : ""),
+        );
       }
 
       case "type": {
@@ -296,7 +343,8 @@ export async function act(action: AgentAction): Promise<ActionResult> {
         const el = resolve(input);
         if (typeof el === "string") return fail(el);
         if (!(el instanceof HTMLSelectElement)) {
-          return fail(`${describe(el)} is not a <select>.`);
+          return fail(`${describe(el)} is not a <select>.`,
+            `${humanName(el)} is not a dropdown.`);
         }
         const wanted = String(input.option ?? "");
         const match = Array.from(el.options).find(
@@ -310,11 +358,13 @@ export async function act(action: AgentAction): Promise<ActionResult> {
             .filter(Boolean)
             .slice(0, 20)
             .join(", ");
-          return fail(`No option ${JSON.stringify(wanted)}. Available: ${available}`);
+          return fail(`No option ${JSON.stringify(wanted)}. Available: ${available}`,
+            `No option called "${wanted}" in that dropdown.`);
         }
         el.value = match.value;
         el.dispatchEvent(new Event("change", { bubbles: true }));
-        return done(`Selected ${JSON.stringify(match.textContent?.trim())}.`);
+        return done(`Selected ${JSON.stringify(match.textContent?.trim())}.`,
+          `Chose "${match.textContent?.trim()}".`);
       }
 
       case "scroll": {
@@ -335,6 +385,7 @@ export async function act(action: AgentAction): Promise<ActionResult> {
           return done(
             `Nothing scrolled — already at the ${up ? "top" : "bottom"} of ` +
               `${at.inner ? "this panel" : "the page"}.`,
+            `Already at the ${up ? "top" : "bottom"}.`,
           );
         }
 
@@ -345,8 +396,12 @@ export async function act(action: AgentAction): Promise<ActionResult> {
           : at.atBottom
             ? " (bottom)"
             : "";
+        // The planner needs the offset to know how much page is left; a viewer
+        // needs to know it moved, and whether it has run out of page.
+        const reached = up ? at.atTop : at.atBottom;
         return done(
           `Scrolled ${up ? "up" : "down"} to y=${at.scrollY} of ${at.pageHeight}${edge}.`,
+          `Scrolled ${up ? "up" : "down"}${reached ? ` to the ${up ? "top" : "bottom"}` : ""}.`,
         );
       }
 
@@ -386,7 +441,7 @@ export async function act(action: AgentAction): Promise<ActionResult> {
         }
 
         await settle();
-        return done(`Pressed ${describeKey(combo)}.`);
+        return done(`Pressed ${describeKey(combo)}.`, `Pressed ${describeKey(combo)}.`);
       }
 
       case "find_text":
@@ -395,16 +450,18 @@ export async function act(action: AgentAction): Promise<ActionResult> {
       case "wait": {
         const ms = Math.min(Number(input.ms ?? 1000), 10000);
         await sleep(ms);
-        return done(`Waited ${ms}ms.`);
+        return done(`Waited ${ms}ms.`, "Waited for the page.");
       }
 
       case "read_page":
         return { ok: true, detail: "Read the page.", capture: captureDom() };
 
       default:
-        return fail(`Action ${name} is not handled in the page context.`);
+        return fail(`Action ${name} is not handled in the page context.`,
+          "That action isn't available on this page.");
     }
   } catch (error) {
-    return fail(`${name} threw: ${error instanceof Error ? error.message : String(error)}`);
+    return fail(`${name} threw: ${error instanceof Error ? error.message : String(error)}`,
+      "That didn't work on this page.");
   }
 }

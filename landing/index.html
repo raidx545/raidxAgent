@@ -189,7 +189,7 @@
       </a>
       <div class="nav-links">
         <a href="#pipeline">Pipeline</a><a href="#proof">Proof</a><a href="#install">Install</a>
-        <a class="nav-cta" href="https://github.com/raidx545/raidxAgent" target="_blank" rel="noopener">GitHub ↗</a>
+        <a class="nav-cta" href="https://github.com/raidx545/vless" target="_blank" rel="noopener">GitHub ↗</a>
       </div>
     </nav>
 
@@ -202,7 +202,7 @@
           <h1>Automation that sees the page.<br /><em>Not your private data.</em></h1>
           <p>VLESS detects personal data locally, replaces it with stable tokens, and burns it from screenshots before an AI model receives browser context.</p>
           <div class="hero-actions"><a class="primary-action" href="#install">Build from source ↓</a><a class="ghost-action" href="#pipeline">See the pipeline</a></div>
-          <div class="terminal"><code>git clone https://github.com/raidx545/raidxAgent.git<br />npm install && npm run build</code><button class="copy" type="button" data-copy="git clone https://github.com/raidx545/raidxAgent.git\nnpm install && npm run build">Copy</button></div>
+          <div class="terminal"><code>git clone https://github.com/raidx545/vless.git<br />npm install && npm run build</code><button class="copy" type="button" data-copy="git clone https://github.com/raidx545/vless.git\nnpm install && npm run build">Copy</button></div>
         </div>
         <svg class="terrain" viewBox="0 0 1500 430" preserveAspectRatio="none" aria-hidden="true">
           <path class="mass" d="M0 332C104 255 191 371 290 316S471 231 581 278s196 112 293 66 151-129 271-78 206 65 355-43v207H0z" />
@@ -248,16 +248,16 @@
 
       <section class="install" id="install">
         <div class="install-head reveal"><div><p class="eyebrow" style="color:var(--pink)">04 / run it locally</p><h2>Private context.<br /><em>Capable automation.</em></h2></div><p>Build the Chrome extension from source, load the `dist` folder, add a model key in options, and inspect the sanitized context before wiring it into your workflow.</p></div>
-        <div class="install-panel reveal"><div class="tabs" role="tablist"><button class="tab" type="button" aria-selected="true" data-command="build">Build source</button><button class="tab" type="button" aria-selected="false" data-command="chrome">Chrome setup</button><button class="tab" type="button" aria-selected="false" data-command="verify">Verify privacy</button></div><div class="commands"><pre id="command">git clone https://github.com/raidx545/raidxAgent.git
-cd raidxAgent
+        <div class="install-panel reveal"><div class="tabs" role="tablist"><button class="tab" type="button" aria-selected="true" data-command="build">Build source</button><button class="tab" type="button" aria-selected="false" data-command="chrome">Chrome setup</button><button class="tab" type="button" aria-selected="false" data-command="verify">Verify privacy</button></div><div class="commands"><pre id="command">git clone https://github.com/raidx545/vless.git
+cd vless
 npm install && npm run build</pre><button class="command-copy" type="button" data-command-copy>Copy</button></div></div>
-        <footer class="footer"><a class="brand" href="#top"><svg class="mark" viewBox="0 0 52 30" aria-hidden="true"><circle class="a" cx="3" cy="24" r="3.2"/><path d="M3 24C9 24 9 5 16 5s6 19 12 19S35 5 42 5s6 19 7 19"/><circle class="b" cx="49" cy="24" r="3.2"/></svg><span>VLESS</span></a><div class="footer-links"><a href="https://github.com/raidx545/raidxAgent" target="_blank" rel="noopener">GitHub ↗</a><a href="#pipeline">privacy pipeline ↑</a></div></footer>
+        <footer class="footer"><a class="brand" href="#top"><svg class="mark" viewBox="0 0 52 30" aria-hidden="true"><circle class="a" cx="3" cy="24" r="3.2"/><path d="M3 24C9 24 9 5 16 5s6 19 12 19S35 5 42 5s6 19 7 19"/><circle class="b" cx="49" cy="24" r="3.2"/></svg><span>VLESS</span></a><div class="footer-links"><a href="https://github.com/raidx545/vless" target="_blank" rel="noopener">GitHub ↗</a><a href="#pipeline">privacy pipeline ↑</a></div></footer>
       </section>
     </main>
     <script>
       const commands = {
-        build: "git clone https://github.com/raidx545/raidxAgent.git\ncd raidxAgent\nnpm install && npm run build",
-        chrome: "chrome://extensions\n→ enable Developer mode\n→ Load unpacked\n→ choose raidxAgent/dist",
+        build: "git clone https://github.com/raidx545/vless.git\ncd vless\nnpm install && npm run build",
+        chrome: "chrome://extensions\n→ enable Developer mode\n→ Load unpacked\n→ choose vless/dist",
         verify: "npm test\nopen dist/selftest.html\n# or open the extension’s PII scan inspector"
       };
       const command = document.getElementById('command');

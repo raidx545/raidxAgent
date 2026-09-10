@@ -121,6 +121,15 @@ export function isRestricted(url: string | undefined): boolean {
   );
 }
 
+/** The bit of a URL a person recognises. A full URL can carry an id. */
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host.replace(/^www\./, "");
+  } catch {
+    return url;
+  }
+}
+
 function normaliseUrl(raw: string): string {
   if (/^https?:\/\//i.test(raw)) return raw;
   if (/^[\w-]+(\.[\w-]+)+/.test(raw)) return `https://${raw}`;
@@ -179,14 +188,24 @@ export async function execute(
       }
       await chrome.tabs.update(controller.tabId, { url });
       await controller.waitForLoad();
-      return { result: { ok: true, detail: `Navigated to ${url}.` }, controller };
+      return {
+        result: { ok: true, detail: `Navigated to ${url}.`, summary: `Opened ${hostOf(url)}.` },
+        controller,
+      };
     }
 
     case "go_back": {
       await chrome.tabs.goBack(controller.tabId).catch(() => undefined);
       await controller.waitForLoad();
       const tab = await chrome.tabs.get(controller.tabId);
-      return { result: { ok: true, detail: `Went back. Now on ${tab.url}.` }, controller };
+      return {
+        result: {
+          ok: true,
+          detail: `Went back. Now on ${tab.url}.`,
+          summary: `Went back to ${hostOf(tab.url ?? "")}.`,
+        },
+        controller,
+      };
     }
 
     case "open_tab": {
@@ -201,7 +220,11 @@ export async function execute(
       const next = new TabController(tab.id!);
       await next.waitForLoad();
       return {
-        result: { ok: true, detail: `Opened ${url} in new tab ${tab.id}. Agent focus moved there.` },
+        result: {
+          ok: true,
+          detail: `Opened ${url} in new tab ${tab.id}. Agent focus moved there.`,
+          summary: `Opened ${hostOf(url)} in a new tab.`,
+        },
         controller: next,
       };
     }
@@ -211,7 +234,14 @@ export async function execute(
       const lines = tabs.map(
         (t) => `- id ${t.id}${t.id === controller.tabId ? " (current)" : ""}: ${t.title} — ${t.url}`,
       );
-      return { result: { ok: true, detail: lines.join("\n") }, controller };
+      return {
+        result: {
+          ok: true,
+          detail: lines.join("\n"),
+          summary: `Listed ${tabs.length} open tab${tabs.length === 1 ? "" : "s"}.`,
+        },
+        controller,
+      };
     }
 
     case "switch_tab": {
@@ -230,7 +260,14 @@ export async function execute(
       await chrome.tabs.update(tabId, { active: true });
       const next = new TabController(tabId);
       await next.waitForLoad();
-      return { result: { ok: true, detail: `Switched to tab ${tabId}: ${tab.title}.` }, controller: next };
+      return {
+        result: {
+          ok: true,
+          detail: `Switched to tab ${tabId}: ${tab.title}.`,
+          summary: `Switched to ${tab.title ?? hostOf(tab.url ?? "")}.`,
+        },
+        controller: next,
+      };
     }
 
     case "close_tab": {
@@ -263,6 +300,7 @@ export async function execute(
           result: {
             ok: true,
             detail: `Closed tab ${tabId}. Now working in tab ${other.id}: ${other.title ?? other.url}.`,
+            summary: `Closed the tab. Now on ${other.title ?? hostOf(other.url ?? "")}.`,
           },
           controller: next,
         };
@@ -270,7 +308,11 @@ export async function execute(
 
       await chrome.tabs.remove(tabId).catch(() => undefined);
       return {
-        result: { ok: true, detail: `Closed tab ${tabId}. Still working in tab ${controller.tabId}.` },
+        result: {
+          ok: true,
+          detail: `Closed tab ${tabId}. Still working in tab ${controller.tabId}.`,
+          summary: "Closed the tab.",
+        },
         controller,
       };
     }

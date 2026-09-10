@@ -62,8 +62,25 @@ export interface AgentAction {
 /** Result of executing one action, fed back to the planner as a tool result. */
 export interface ActionResult {
   ok: boolean;
-  /** Human- and model-readable description of what happened. */
+  /**
+   * What happened, for the model.
+   *
+   * Precise and technical on purpose: element ids, roles, tag names. The
+   * planner acts on ids, so a result that hides them is a result it cannot use.
+   */
   detail: string;
+  /**
+   * The same thing, for the person watching.
+   *
+   * `detail` reads like a debugger because the model needs it to. A viewer
+   * needs a sentence: "Clicked the Compose button", not
+   * `Clicked <div "Compose">.` The side panel prefers this and falls back to
+   * `detail` where an action has nothing simpler to say.
+   *
+   * This never reaches the model, and `detail` never reaches the panel - the
+   * same split the transcript already makes between real values and tokens.
+   */
+  summary?: string;
   /**
    * A fresh view of the page, populated when the action may have changed it.
    *

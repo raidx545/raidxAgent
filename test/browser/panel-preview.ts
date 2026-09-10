@@ -28,7 +28,7 @@ entry({
 });
 entry({
   id: "s1", role: "system",
-  text: "18 value(s) tokenized · 2 sealed · 3 image region(s) destroyed · 11 text span(s) painted over in the screenshot",
+  text: "18 values tokenized · 2 sealed · 3 image regions destroyed · 11 text spans painted over in the screenshot",
 });
 entry({
   id: "a1", role: "assistant",
@@ -36,15 +36,17 @@ entry({
 });
 
 // A run of actions long enough to fold, which is what a real task produces.
+// The sentences a viewer actually sees: `ActionResult.summary`, not the
+// model's `detail`. No element ids, no tag names, no scroll offsets.
 const steps: [string, string][] = [
-  ["navigate", "Go to https://mail.google.com/mail/u/0/#inbox?compose=new"],
-  ["read_page", "Read the page"],
-  ["type", "Typed 23 character(s) into <input> and pressed Enter"],
-  ["type", "Typed 21 character(s) into <input>"],
-  ["scroll", "Scrolled down to y=794 of 2328."],
-  ["scroll", "Scrolled down to y=1464 of 2328 (bottom)."],
-  ["find_text", 'Found 1 match for "Send": [37] button text="Send message"'],
-  ["type", "Typed 34 character(s) into <div>"],
+  ["navigate", "Opened mail.google.com."],
+  ["read_page", "Read the page."],
+  ["type", 'Filled in the "To recipients" field and pressed Enter.'],
+  ["type", 'Filled in the "Subject" field.'],
+  ["scroll", "Scrolled down."],
+  ["scroll", "Scrolled down to the bottom."],
+  ["find_text", 'Found 1 match for "Send".'],
+  ["type", 'Filled in the "Message Body" field.'],
 ];
 steps.forEach(([action, text], i) =>
   entry({ id: `t${i}`, role: "step", action: action as TranscriptEntry["action"], text }),

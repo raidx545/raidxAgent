@@ -1,4 +1,4 @@
-# RAIDX Agent
+# VLESS Agent
 
 A Chrome extension that operates the browser for you. You give it a goal in the
 side panel; it reads the page, decides on one action, takes it, looks at what

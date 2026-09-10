@@ -263,9 +263,10 @@ export async function runTask(
         id: nextId(),
         role: "system",
         text:
-          `Your request contained ${scanned.findings.length} value(s) worth protecting ` +
+          `Your request contained ${count(scanned.findings.length, "value")} worth protecting ` +
           `(${[...new Set(scanned.findings.map((f) => f.kind))].join(", ")}). ` +
-          `They were tokenized before the request left this browser.`,
+          `${scanned.findings.length === 1 ? "It was" : "They were"} tokenized before the ` +
+          `request left this browser.`,
       },
     });
   }
@@ -349,7 +350,7 @@ export async function runTask(
           id: nextId(),
           role: "error",
           text:
-            `⚠ ${leaked.length} value(s) reached the outgoing payload unsanitized: ` +
+            `⚠ ${count(leaked.length, "value")} reached the outgoing payload unsanitized: ` +
             leaked.map((f) => `${f.kind} ${f.masked}`).join(", ") +
             `. Open the wire log — this turn is flagged there with the exact text.`,
         },
@@ -467,7 +468,7 @@ export async function runTask(
           `Not run: the page changed after the ${dirtiedBy} earlier in this turn, so this ` +
           `call was aimed at a layout that no longer exists. The current page is attached ` +
           `to the last result - plan the next step from it. One action per turn is safest.`;
-        emit({ kind: "patch", id: stepId, text: "Skipped — the page changed first.", pending: false });
+        emit({ kind: "patch", id: stepId, text: "Skipped — the page had already moved on.", pending: false });
         results.push({ id: call.id, content: reason, isError: true });
         continue;
       }
@@ -517,7 +518,7 @@ export async function runTask(
             `act on what is already on screen, use find_text to locate the control by name, go ` +
             `straight to a URL that shows it, or tell the user you cannot find it. If you need ` +
             `to cover ground, scroll a whole screen at a time rather than a hundred pixels.`;
-          emit({ kind: "patch", id: stepId, text: "Refused — too much scrolling.", pending: false });
+          emit({ kind: "patch", id: stepId, text: "Stopped scrolling — trying another way.", pending: false });
           results.push({ id: call.id, content: reason, isError: true });
           continue;
         }
@@ -563,7 +564,12 @@ export async function runTask(
         const reason =
           `There is no element ${targeted} on this page. Element ids are only valid ` +
           `for the most recent page read — call read_page and use the new ids.`;
-        emit({ kind: "patch", id: stepId, text: `Rejected — ${reason}`, pending: false });
+        emit({
+          kind: "patch",
+          id: stepId,
+          text: "Skipped — that element is no longer on the page.",
+          pending: false,
+        });
         results.push({ id: call.id, content: reason, isError: true });
         continue;
       }
@@ -573,6 +579,7 @@ export async function runTask(
       const decision = gate(action, current?.dom, settings.confirmRisky);
 
       if (decision.verdict === "refuse") {
+        // The gate's reason is written for a person already, so it is shown as is.
         emit({ kind: "patch", id: stepId, text: `Blocked — ${decision.reason}`, pending: false });
         results.push({ id: call.id, content: decision.reason, isError: true });
         continue;
@@ -598,7 +605,12 @@ export async function runTask(
         const reason =
           `Refusing: ${resolved.unknown.join(", ")} ${resolved.unknown.length === 1 ? "is" : "are"} ` +
           `not a token this browser issued. Only use tokens exactly as they appear on the page.`;
-        emit({ kind: "patch", id: stepId, text: `Blocked — ${reason}`, pending: false });
+        emit({
+          kind: "patch",
+          id: stepId,
+          text: `Blocked — ${resolved.unknown.join(", ")} is not a placeholder this browser issued.`,
+          pending: false,
+        });
         results.push({ id: call.id, content: reason, isError: true });
         continue;
       }
@@ -606,7 +618,12 @@ export async function runTask(
         const reason =
           `${resolved.sealed.join(", ")} stands for a value this browser deliberately never read, ` +
           `such as a password. There is nothing behind it. Ask the user to fill that field themselves.`;
-        emit({ kind: "patch", id: stepId, text: `Blocked — ${reason}`, pending: false });
+        emit({
+          kind: "patch",
+          id: stepId,
+          text: `Blocked — ${resolved.sealed.join(", ")} stands for something this browser never read, such as a password.`,
+          pending: false,
+        });
         results.push({ id: call.id, content: reason, isError: true });
         continue;
       }
@@ -615,8 +632,9 @@ export async function runTask(
       controller = outcome.controller;
       const { result } = outcome;
 
-      // The transcript is for the user, so it shows the real detail.
-      emit({ kind: "patch", id: stepId, text: result.detail, pending: false });
+      // The transcript is for the user, so it shows real values - and the plain
+      // sentence rather than the model's technical one, where there is one.
+      emit({ kind: "patch", id: stepId, text: result.summary ?? result.detail, pending: false });
 
       // The conversation is not. Tool results are built in the page and in the
       // tabs API - element inner text, matched page text, tab titles, full URLs
@@ -767,16 +785,24 @@ async function revealForUser(
   }
 }
 
+/** "1 value" not "1 value(s)" - this line is read, and on a demo it is filmed. */
+function count(n: number, one: string, many = `${one}s`): string {
+  return `${n} ${n === 1 ? one : many}`;
+}
+
 function reportSanitization(capture: SanitizedCapture, emit: (e: AgentEvent) => void): void {
   const r = capture.report;
   const swapped = r.tokenize.spansReplaced + r.tokenize.fieldsReplaced;
-  const bits = [`${swapped} value(s) tokenized`, `${r.tokenize.fieldsSealed} sealed`];
-  if (r.redact.regionsBurned > 0) bits.push(`${r.redact.regionsBurned} image region(s) destroyed`);
+  const bits = [`${count(swapped, "value")} tokenized`];
+  if (r.tokenize.fieldsSealed > 0) bits.push(`${r.tokenize.fieldsSealed} sealed`);
+  if (r.redact.regionsBurned > 0) {
+    bits.push(`${count(r.redact.regionsBurned, "image region")} destroyed`);
+  }
   if (r.redact.textSpansCovered > 0) {
-    bits.push(`${r.redact.textSpansCovered} text span(s) painted over in the screenshot`);
+    bits.push(`${count(r.redact.textSpansCovered, "text span")} painted over in the screenshot`);
   }
   if (r.residual.length > 0) {
-    bits.push(`⚠ ${r.residual.length} finding(s) survived sanitization`);
+    bits.push(`⚠ ${count(r.residual.length, "finding")} survived sanitization`);
   }
   emit({ kind: "entry", entry: { id: nextId(), role: "system", text: bits.join(" · ") } });
 }
@@ -799,10 +825,12 @@ function warnInjected(capture: DomCapture, emit: (e: AgentEvent) => void): void 
 function describeIntent(name: string, input: Record<string, unknown>): string {
   const reason = typeof input.reason === "string" ? input.reason : "";
   switch (name) {
+    // The tool schema requires `reason`, so these fallbacks are rare - but an
+    // element id is an internal handle and should never be what a viewer reads.
     case "click":
-      return reason || `Click element ${input.element_id}`;
+      return reason || "Click";
     case "type":
-      return reason || `Type into element ${input.element_id}`;
+      return reason || "Type";
     case "navigate":
       return `Go to ${input.url}`;
     case "open_tab":
