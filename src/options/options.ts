@@ -13,6 +13,8 @@ const modelEl = $<HTMLInputElement>("model");
 const modelList = $<HTMLDataListElement>("model-list");
 const modelStatus = $("model-status");
 const maxStepsEl = $<HTMLInputElement>("maxSteps");
+const reasoningEl = $<HTMLSelectElement>("reasoningEffort");
+const ocrEl = $<HTMLSelectElement>("ocrMode");
 const confirmRiskyEl = $<HTMLInputElement>("confirmRisky");
 const sendScreenshotEl = $<HTMLInputElement>("sendScreenshot");
 const fullPageCaptureEl = $<HTMLInputElement>("fullPageCapture");
@@ -62,6 +64,8 @@ function render(): void {
   apiKeyEl.placeholder = provider.keyHint;
   modelEl.value = settings.models[provider.id] ?? provider.defaultModel;
   maxStepsEl.value = String(settings.maxSteps);
+  reasoningEl.value = settings.reasoningEffort;
+  ocrEl.value = settings.ocrMode;
   confirmRiskyEl.checked = settings.confirmRisky;
   sendScreenshotEl.checked = settings.sendScreenshot;
   fullPageCaptureEl.checked = settings.fullPageCapture;
@@ -106,6 +110,9 @@ refreshBtn.addEventListener("click", async () => {
 $("save").addEventListener("click", async () => {
   captureVisibleFields();
   settings.maxSteps = Math.min(200, Math.max(5, Number(maxStepsEl.value) || 40));
+  settings.reasoningEffort =
+    reasoningEl.value === "off" || reasoningEl.value === "deep" ? reasoningEl.value : "standard";
+  settings.ocrMode = ocrEl.value === "off" || ocrEl.value === "full" ? ocrEl.value : "images";
   settings.confirmRisky = confirmRiskyEl.checked;
   settings.sendScreenshot = sendScreenshotEl.checked;
   settings.fullPageCapture = fullPageCaptureEl.checked;

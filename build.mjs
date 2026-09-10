@@ -1,5 +1,5 @@
 import * as esbuild from "esbuild";
-import { cp, mkdir, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 
 const watch = process.argv.includes("--watch");
 
@@ -16,6 +16,24 @@ await cp("src/offscreen/vault-host.html", "dist/vault-host.html");
 await cp("src/wirelog/index.html", "dist/wirelog.html");
 await cp("src/inspector/inspector.css", "dist/inspector.css");
 await cp("icons", "dist/icons", { recursive: true });
+
+/**
+ * Tesseract ships as three pieces that must all be inside the extension:
+ * Manifest V3 forbids loading any of them from a CDN. The worker script, the
+ * wasm cores (Tesseract picks SIMD, relaxed-SIMD or plain at runtime, so all
+ * three LSTM builds go in), and the English language data.
+ */
+await mkdir("dist/tesseract/lang", { recursive: true });
+await cp("node_modules/tesseract.js/dist/worker.min.js", "dist/tesseract/worker.min.js");
+for (const core of [
+  "tesseract-core-simd-lstm",
+  "tesseract-core-relaxedsimd-lstm",
+  "tesseract-core-lstm",
+]) {
+  await cp(`node_modules/tesseract.js-core/${core}.wasm.js`, `dist/tesseract/${core}.wasm.js`);
+  await cp(`node_modules/tesseract.js-core/${core}.wasm`, `dist/tesseract/${core}.wasm`);
+}
+await cp("assets/tessdata/eng.traineddata.gz", "dist/tesseract/lang/eng.traineddata.gz");
 
 /**
  * The Anthropic SDK statically imports node:fs / node:path for its file-based
@@ -96,6 +114,65 @@ async function buildSelfTest() {
   );
 }
 
+/**
+ * A page that runs the real Tesseract engine against text it draws itself.
+ *
+ * The extension cannot be loaded by a test harness, but the engine module
+ * resolves its assets relative to the page when there is no chrome.runtime -
+ * so serving dist/ over http and opening this page exercises the exact bundle,
+ * worker, wasm core and language data the extension ships.
+ */
+async function buildOcrCheck() {
+  const bundle = await esbuild.build({
+    entryPoints: ["test/browser/ocr-check.ts"],
+    bundle: true,
+    write: false,
+    format: "iife",
+    platform: "browser",
+    target: "chrome120",
+    logLevel: "silent",
+  });
+  await writeFile(
+    "dist/ocr-check.html",
+    `<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>RAIDX OCR check</title></head>
+<body><p>Running OCR…</p><script>${bundle.outputFiles[0].text}</script></body>
+</html>`,
+  );
+}
+
+/**
+ * The side panel, rendered outside the extension.
+ *
+ * Chrome will only open the real panel as part of a loaded extension, which
+ * makes every visual change to it awkward to check. This page loads the real
+ * stylesheet and the real transcript view and plays a scripted task through
+ * them.
+ */
+async function buildPanelPreview() {
+  const bundle = await esbuild.build({
+    entryPoints: ["test/browser/panel-preview.ts"],
+    bundle: true,
+    write: false,
+    format: "iife",
+    platform: "browser",
+    target: "chrome120",
+    logLevel: "silent",
+  });
+
+  const shell = (await readFile("src/sidepanel/index.html", "utf8"))
+    // The real panel loads a module that talks to the extension; this one does
+    // not, so its script is swapped for the scripted run.
+    .replace(
+      '<script type="module" src="sidepanel.js"></script>',
+      `<script>${bundle.outputFiles[0].text}</script>`,
+    )
+    .replace("<title>RAIDX Agent</title>", "<title>RAIDX panel preview</title>");
+
+  await writeFile("dist/panel-preview.html", shell);
+}
+
 if (watch) {
   for (const options of builds) {
     const ctx = await esbuild.context(options);
@@ -105,5 +182,9 @@ if (watch) {
 } else {
   await Promise.all(builds.map((options) => esbuild.build(options)));
   await buildSelfTest();
-  console.log("\n  dist/selftest.html  — open in Chrome to test canvas redaction");
+  await buildOcrCheck();
+  await buildPanelPreview();
+  console.log("\n  dist/selftest.html      — open in Chrome to test canvas redaction");
+  console.log("  dist/ocr-check.html     — serve dist/ over http to test the OCR engine");
+  console.log("  dist/panel-preview.html — the side panel, with a scripted run");
 }

@@ -38,8 +38,61 @@ export const NOT_A_NAME = new Set(
     "english hindi language version update news blog article post comment share " +
     "shipping billing delivery return refund cart checkout " +
     "quantity item items description reference number status active inactive pending " +
-    "gst tax cgst sgst igst hsn sac"
+    "gst tax cgst sgst igst hsn sac " +
+    "dear sir madam your our my you we us it its sales marketing team hr department"
   ).split(/\s+/),
+);
+
+/**
+ * Words a name can never begin with, even when the evidence around it is
+ * strong. This is the small subset of the list above that is safe to apply to
+ * a name introduced by a cue or an honorific: "Bill to: The Customer" is not a
+ * name because it starts with "The"; "Bill to: Bharat Kumar" is one even though
+ * "Bharat" is also the country, because a cue was in front of it.
+ */
+export const NEVER_STARTS_A_NAME = new Set(
+  (
+    "the a an this that these those and or but for to of in on at from by with " +
+    "your our my their his her its you we us they it " +
+    "dear regards thanks please"
+  ).split(/\s+/),
+);
+
+/**
+ * Words that must never be swapped for a token in text the *user* wrote.
+ *
+ * Aligning the request with the page is a literal find-and-replace of vault
+ * values, and a vault holds whatever the page called a person. Gmail lists a
+ * thread's participants as "me, you", so "you" was learnt as a name - and then
+ * "tell me the oldest sender you can see" was sent to the model as "the oldest
+ * sender <NAME_21> can see". The instruction was destroyed by its own privacy
+ * layer, which is far worse than leaving a three-letter word alone.
+ *
+ * A pronoun or a function word is never what the user meant to name, whatever
+ * the page called it. Length alone cannot decide this: "Raj" is three letters
+ * and is a name; "you" is three letters and never is.
+ */
+export const NEVER_ALIGN = new Set(
+  (
+    "i me my mine myself we us our ours you your yours he him his she her hers " +
+    "it its they them their theirs this that these those who whom whose which what " +
+    "a an the and or but if then than so as at by for from in into of on to up with " +
+    "is are was were be been being am do does did done have has had will would can " +
+    "could shall should may might must not no yes all any some none more most less " +
+    "here there now then when where why how new old first last next previous " +
+    "me too also both each every other another same such only just very " +
+    "mail email inbox sender subject reply forward draft message page site link " +
+    "one two three four five six seven eight nine ten"
+  ).split(/\s+/),
+);
+
+/**
+ * Honorifics as a set, for stripping them off the front of a name that a cue
+ * phrase captured whole: "Dear Mr. Rahul Verma" is Rahul Verma, and the
+ * honorific is not part of the identifier.
+ */
+export const HONORIFIC_WORDS = new Set(
+  "mr mrs ms miss mx dr prof professor sir madam shri shree sri smt kum capt col maj lt rev hon".split(" "),
 );
 
 /** Titles that make the following capitalised words a name with near-certainty. */

@@ -1,6 +1,7 @@
 import type { DomCapture } from "../capture/types";
 import { walkCapture } from "../capture/dom";
 import type { Detector, Finding, PiiKind } from "./types";
+import { NEVER_ALIGN } from "./entities";
 
 /**
  * Tier 1: what the page tells us about itself.
@@ -73,13 +74,26 @@ const KEYWORDS: { pattern: RegExp; kind: PiiKind; confidence: "high" | "medium" 
   { pattern: /\bpassport\b/i, kind: "passport", confidence: "high" },
   { pattern: /\b(voter|epic)[\s_-]?(id|no)\b/i, kind: "voter_id", confidence: "high" },
   { pattern: /\b(cvv|cvc|card[\s_-]?(no|number)|expiry)\b/i, kind: "payment_field", confidence: "high" },
-  { pattern: /\b(password|passcode|pin)\b/i, kind: "credential_field", confidence: "high" },
+  // Postal code before credential, and the credential rule refuses "pin"
+  // when "code" follows. "PIN Code" is an address field, and matching it as a
+  // password sealed every pincode on every address form - the planner was then
+  // refused permission to type into it, so no address could be completed.
+  { pattern: /\b(pin[\s_-]?code|postal[\s_-]?code|zip(?:[\s_-]?code)?)\b/i, kind: "pincode", confidence: "high" },
+  { pattern: /\b(password|passcode|m?pin|atm[\s_-]?pin|upi[\s_-]?pin|transaction[\s_-]?pin|t[\s_-]?pin)\b(?![\s_-]?code)/i, kind: "credential_field", confidence: "high" },
   { pattern: /\b(otp|one[\s_-]?time)\b/i, kind: "credential_field", confidence: "high" },
-  { pattern: /\b(api[\s_-]?key|secret|token)\b/i, kind: "credential_field", confidence: "medium" },
+  { pattern: /\b(api[\s_-]?key|secret|access[\s_-]?token|auth[\s_-]?token|bearer|private[\s_-]?key)\b/i, kind: "credential_field", confidence: "medium" },
   { pattern: /\b(dob|date[\s_-]?of[\s_-]?birth|birth[\s_-]?date)\b/i, kind: "date_of_birth", confidence: "high" },
-  { pattern: /\b(full[\s_-]?name|first[\s_-]?name|last[\s_-]?name|surname)\b/i, kind: "person_name", confidence: "medium" },
+  // "Display name", "Account name" and "Username" hold a person's name just as
+  // often as "Full name" does, and a settings page rarely uses the formal
+  // wording. Missing them let a real name through untouched on a page with no
+  // other signal - no identity annotation, no email to derive it from.
+  {
+    pattern:
+      /\b(full[\s_-]?name|first[\s_-]?name|last[\s_-]?name|surname|given[\s_-]?name|family[\s_-]?name|display[\s_-]?name|account[\s_-]?name|profile[\s_-]?name|screen[\s_-]?name|user[\s_-]?name|nick[\s_-]?name|your[\s_-]?name|name[\s_-]?on[\s_-]?(card|account))\b/i,
+    kind: "person_name",
+    confidence: "medium",
+  },
   { pattern: /\b(address|street|locality)\b/i, kind: "postal_address", confidence: "medium" },
-  { pattern: /\b(pin[\s_-]?code|postal[\s_-]?code|zip)\b/i, kind: "pincode", confidence: "medium" },
   { pattern: /\b(mobile|phone|contact[\s_-]?(no|number))\b/i, kind: "phone", confidence: "medium" },
 ];
 
@@ -140,7 +154,21 @@ export const tier1DomSignals: Detector = {
       if (!kind) continue;
 
       const record = !NEVER_RECORD.has(kind);
-      const value = record ? node.value : undefined;
+      let value = record ? node.value : undefined;
+
+      // A name-shaped field whose value is a single ordinary word is not a
+      // name. Mail clients put "me" and "you" in participant fields, and a
+      // token standing for "you" is worse than no token: it pollutes every
+      // later match of that word. The field is still reported - the planner
+      // needs to know it exists - it just has nothing worth tokenizing.
+      if (
+        value !== undefined &&
+        (kind === "person_name" || kind === "org_name") &&
+        !/\s/.test(value.trim()) &&
+        NEVER_ALIGN.has(value.trim().toLowerCase().replace(/[^\p{L}]/gu, ""))
+      ) {
+        value = undefined;
+      }
 
       // Is there anything in this field? For most fields the captured value
       // answers that. For a password the value is never captured at all, so the

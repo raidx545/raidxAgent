@@ -32,9 +32,22 @@ export interface Viewport {
   height: number;
   /** Screenshot pixels per CSS pixel — captureVisibleTab renders at this scale. */
   dpr: number;
+  /**
+   * Window scroll. This is the screenshot coordinate frame - see the note on
+   * ScreenshotMeta - so it must stay the *window's* offset even on pages where
+   * the window never moves. What the user is looking at is below.
+   */
   scrollX: number;
   scrollY: number;
   pageHeight: number;
+  /**
+   * Where the page's own scrolling region sits, which on an application shell
+   * (Gmail, Slack, most SPAs) is an inner container rather than the window.
+   * Absent when the document itself scrolls, in which case the fields above
+   * already say it.
+   */
+  contentScrollY?: number;
+  contentHeight?: number;
 }
 
 export interface DomCapture {

@@ -1,14 +1,48 @@
 import { Vault } from "../vault/vault";
 import type { VaultRequest, VaultResponse } from "../vault/protocol";
+import type { OcrRequest, OcrResponse } from "../pii/ocr";
+import { engine, engineStatus, recognizeImages } from "./ocr-engine";
 
 /**
- * Owns the one true vault.
+ * Owns the one true vault, and the OCR engine.
  *
  * This document is never displayed. Its whole purpose is to be a JavaScript
  * realm that Chrome will not tear down on the service worker's schedule, so
- * that token mappings survive a worker restart in the middle of a task.
+ * that token mappings survive a worker restart in the middle of a task - and,
+ * since it is also the one realm here that may spawn a Web Worker, it is where
+ * Tesseract runs. Loading the engine costs a second or two once; keeping it
+ * here means once per session rather than once per step.
  */
 const vault = new Vault();
+
+// Start loading the engine now, so the first screenshot does not wait for it.
+void engine().catch(() => undefined);
+
+chrome.runtime.onMessage.addListener(
+  (request: OcrRequest, _sender, sendResponse: (response: OcrResponse) => void) => {
+    if (typeof request?.kind !== "string" || !request.kind.startsWith("ocr:")) return false;
+
+    switch (request.kind) {
+      case "ocr:status": {
+        const status = engineStatus();
+        sendResponse({ ok: true, kind: "status", ready: status.ready, engine: "tesseract.js", error: status.error });
+        return false;
+      }
+
+      case "ocr:recognize":
+        recognizeImages(request.images).then(
+          (results) => sendResponse({ ok: true, kind: "recognized", results }),
+          (error) =>
+            sendResponse({ ok: false, error: error instanceof Error ? error.message : String(error) }),
+        );
+        // Async reply: keep the channel open.
+        return true;
+
+      default:
+        return false;
+    }
+  },
+);
 
 chrome.runtime.onMessage.addListener(
   (request: VaultRequest, _sender, sendResponse: (response: VaultResponse) => void) => {

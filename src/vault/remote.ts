@@ -18,6 +18,53 @@ const OFFSCREEN_PATH = "vault-host.html";
 
 export type VaultHosting = "offscreen" | "in-process";
 
+let offscreenReady: Promise<boolean> | undefined;
+
+/**
+ * Ensures the offscreen document exists, and says whether it could.
+ *
+ * Chrome allows exactly one per extension, and creating a second throws, so an
+ * existing document is reused rather than replaced - which is also what keeps
+ * the vault's mappings. The vault and the OCR engine both live in it, and both
+ * go through here.
+ */
+export async function ensureOffscreenDocument(): Promise<boolean> {
+  if (offscreenReady) return offscreenReady;
+
+  offscreenReady = (async () => {
+    if (!chrome.offscreen) return false;
+    try {
+      const existing = await chrome.runtime.getContexts({
+        contextTypes: ["OFFSCREEN_DOCUMENT" as chrome.runtime.ContextType],
+      });
+      if (existing.length > 0) return true;
+
+      await chrome.offscreen.createDocument({
+        url: OFFSCREEN_PATH,
+        reasons: ["WORKERS" as chrome.offscreen.Reason],
+        justification:
+          "Holds PII token mappings in memory for the length of a session, and runs the " +
+          "OCR worker that reads screenshots before they are sent, both outliving the " +
+          "service worker so a task is not interrupted by its idle timer.",
+      });
+      return true;
+    } catch (error) {
+      // Another call may have created it in the gap between check and create.
+      return String(error).includes("Only a single offscreen");
+    }
+  })();
+
+  const ok = await offscreenReady;
+  // A failure is not cached: the next caller should try again.
+  if (!ok) offscreenReady = undefined;
+  return ok;
+}
+
+/** Forgets the cached state, after the document has been closed. */
+export function forgetOffscreenDocument(): void {
+  offscreenReady = undefined;
+}
+
 export class RemoteVault {
   private fallback: Vault | undefined;
   private ready: Promise<void> | undefined;
@@ -37,32 +84,10 @@ export class RemoteVault {
     if (this.ready) return this.ready;
 
     this.ready = (async () => {
-      if (!chrome.offscreen) {
+      const hosted = await ensureOffscreenDocument();
+      if (!hosted) {
         this.mode = "in-process";
         this.fallback = new Vault();
-        return;
-      }
-
-      try {
-        const existing = await chrome.runtime.getContexts({
-          contextTypes: ["OFFSCREEN_DOCUMENT" as chrome.runtime.ContextType],
-        });
-        if (existing.length > 0) return;
-
-        await chrome.offscreen.createDocument({
-          url: OFFSCREEN_PATH,
-          reasons: ["WORKERS" as chrome.offscreen.Reason],
-          justification:
-            "Holds PII token mappings in memory for the length of a session, " +
-            "outliving the service worker so tokens stay resolvable mid-task.",
-        });
-      } catch (error) {
-        // Another call may have created it in the gap between check and create.
-        const raced = String(error).includes("Only a single offscreen");
-        if (!raced) {
-          this.mode = "in-process";
-          this.fallback = new Vault();
-        }
       }
     })();
 
@@ -81,6 +106,7 @@ export class RemoteVault {
     } catch (error) {
       // The document went away - recreate it once, then give up and degrade.
       this.ready = undefined;
+      forgetOffscreenDocument();
       await this.ensure();
       if (this.fallback) return this.local(request);
       try {
@@ -184,6 +210,7 @@ export class RemoteVault {
     await this.clear();
     if (!this.fallback && chrome.offscreen) {
       await chrome.offscreen.closeDocument().catch(() => undefined);
+      forgetOffscreenDocument();
     }
     this.fallback = undefined;
     this.ready = undefined;

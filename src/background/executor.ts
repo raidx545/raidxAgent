@@ -15,8 +15,17 @@ export class TabController {
     try {
       return await chrome.tabs.sendMessage(this.tabId, request);
     } catch {
-      await this.inject();
-      return await chrome.tabs.sendMessage(this.tabId, request);
+      try {
+        await this.inject();
+        return await chrome.tabs.sendMessage(this.tabId, request);
+      } catch (error) {
+        // Chrome's own wording for a page that went away mid-action is
+        // "Frame with ID 0 was removed" / "No tab with id". Left raw it ends
+        // the task with a sentence about frames, which tells the planner
+        // nothing it can act on - and the situation is ordinary: a click
+        // navigated, and the page we were talking to no longer exists.
+        throw new PageGoneError(describeGone(error));
+      }
     }
   }
 
@@ -34,11 +43,20 @@ export class TabController {
       const tab = await chrome.tabs.get(this.tabId).catch(() => null);
       if (!tab) return;
       if (tab.status === "complete") {
-        // Give client-rendered pages a moment to paint their first content.
-        await new Promise((r) => setTimeout(r, 400));
+        // The load event is not the page being ready. A client-rendered app
+        // paints its real content some time after it, and a static page is
+        // ready before it. Ask the page itself when it has stopped changing
+        // rather than guessing with a fixed delay - this used to be 400ms,
+        // which was too long for the second case and not enough for the first.
+        //
+        // A browser-internal page has no content script to ask; there is
+        // nothing to settle there anyway.
+        if (!isRestricted(tab.url)) {
+          await this.send({ kind: "settle" }).catch(() => undefined);
+        }
         return;
       }
-      await new Promise((r) => setTimeout(r, 250));
+      await new Promise((r) => setTimeout(r, 100));
     }
   }
 
@@ -77,6 +95,17 @@ export class TabController {
   async act(action: AgentAction): Promise<ActionResult> {
     return this.send({ kind: "act", action });
   }
+}
+
+/** The page we were driving went away - normally because it navigated. */
+export class PageGoneError extends Error {}
+
+function describeGone(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error);
+  if (/frame with id|no tab with id|receiving end does not exist|message port closed/i.test(raw)) {
+    return "The page navigated or closed while this action was running, so it could not be completed. Read the page again and continue from what is there now.";
+  }
+  return `The page could not be reached: ${raw}`;
 }
 
 /** URLs the content script can never run on, so the agent cannot work there. */
@@ -122,12 +151,32 @@ export async function execute(
         controller,
       };
     }
-    return { result: await controller.act(action), controller };
+    try {
+      return { result: await controller.act(action), controller };
+    } catch (error) {
+      // A lost page is a tool result, not the end of the run.
+      if (error instanceof PageGoneError) {
+        return { result: { ok: false, detail: error.message }, controller };
+      }
+      throw error;
+    }
   }
 
   switch (name) {
     case "navigate": {
       const url = normaliseUrl(String(input.url ?? ""));
+      // Going to a page the extension cannot read would end the task with
+      // "Lost the page" on the next capture. Say so now, while the planner can
+      // still choose somewhere else.
+      if (isRestricted(url)) {
+        return {
+          result: {
+            ok: false,
+            detail: `${url} is a browser-internal page and cannot be worked on. Choose a normal website.`,
+          },
+          controller,
+        };
+      }
       await chrome.tabs.update(controller.tabId, { url });
       await controller.waitForLoad();
       return { result: { ok: true, detail: `Navigated to ${url}.` }, controller };
@@ -142,6 +191,12 @@ export async function execute(
 
     case "open_tab": {
       const url = normaliseUrl(String(input.url ?? ""));
+      if (isRestricted(url)) {
+        return {
+          result: { ok: false, detail: `${url} is a browser-internal page and cannot be worked on.` },
+          controller,
+        };
+      }
       const tab = await chrome.tabs.create({ url, active: true });
       const next = new TabController(tab.id!);
       await next.waitForLoad();
@@ -163,6 +218,15 @@ export async function execute(
       const tabId = Number(input.tab_id);
       const tab = await chrome.tabs.get(tabId).catch(() => null);
       if (!tab) return { result: { ok: false, detail: `No tab ${tabId}.` }, controller };
+      if (isRestricted(tab.url)) {
+        return {
+          result: {
+            ok: false,
+            detail: `Tab ${tabId} is on ${tab.url}, a browser-internal page the agent cannot work in.`,
+          },
+          controller,
+        };
+      }
       await chrome.tabs.update(tabId, { active: true });
       const next = new TabController(tabId);
       await next.waitForLoad();
@@ -171,14 +235,44 @@ export async function execute(
 
     case "close_tab": {
       const tabId = Number(input.tab_id);
+
+      // "Close this tab" is the ordinary way to ask, and refusing it outright -
+      // which is what this did - made the request impossible to satisfy. The
+      // real constraint is narrower: the agent needs *somewhere* to stand. So
+      // move to another tab first, then close this one.
       if (tabId === controller.tabId) {
+        const tabs = await chrome.tabs.query({ currentWindow: true });
+        const other = tabs.find((t) => t.id !== undefined && t.id !== tabId && !isRestricted(t.url));
+        if (!other?.id) {
+          return {
+            result: {
+              ok: false,
+              detail:
+                "This is the only tab I can work in, so closing it would end the task. " +
+                "Open another page first, or ask the user to close it themselves.",
+            },
+            controller,
+          };
+        }
+
+        await chrome.tabs.update(other.id, { active: true });
+        await chrome.tabs.remove(tabId).catch(() => undefined);
+        const next = new TabController(other.id);
+        await next.waitForLoad();
         return {
-          result: { ok: false, detail: "Refusing to close the tab the agent is working in." },
-          controller,
+          result: {
+            ok: true,
+            detail: `Closed tab ${tabId}. Now working in tab ${other.id}: ${other.title ?? other.url}.`,
+          },
+          controller: next,
         };
       }
+
       await chrome.tabs.remove(tabId).catch(() => undefined);
-      return { result: { ok: true, detail: `Closed tab ${tabId}.` }, controller };
+      return {
+        result: { ok: true, detail: `Closed tab ${tabId}. Still working in tab ${controller.tabId}.` },
+        controller,
+      };
     }
 
     default:

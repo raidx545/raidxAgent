@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>OCR test page</title>
+<style>
+  body { font: 16px/1.5 system-ui, sans-serif; max-width: 900px; margin: 40px auto; padding: 0 20px; }
+  h1 { font-size: 22px; }
+  section { margin: 28px 0; padding: 16px; border: 1px solid #ccc; border-radius: 8px; }
+  h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .08em; color: #666; margin: 0 0 10px; }
+  .bg { width: 520px; height: 90px; background-size: cover; border: 1px solid #999; }
+  small { color: #777; }
+</style>
+</head>
+<body>
+<h1>RAIDX OCR test page</h1>
+<p>Everything below is text drawn into pixels. The page tree contains none of it except the line marked as plain text.</p>
+
+<section>
+  <h2>A. Plain DOM text (the join-key reference)</h2>
+  <p>Helpline: 98765 43210 · Mail: priya.sharma@example.in</p>
+  <small>Tree-detected. The same values appear in the images below and must get the same tokens.</small>
+</section>
+
+<section>
+  <h2>B. An &lt;img&gt; banner with text baked in</h2>
+  <img id="banner" alt="summer sale banner" width="620" height="120">
+  <br><small>alt says nothing about PII, so nothing but OCR will find this.</small>
+</section>
+
+<section>
+  <h2>C. A live &lt;canvas&gt; (a canvas-rendered document)</h2>
+  <canvas id="doc" width="700" height="220" style="border:1px solid #999"></canvas>
+  <br><small>Before OCR this whole box went black. Now only the identifiers should be covered.</small>
+</section>
+
+<section>
+  <h2>D. A &lt;div&gt; with a CSS background image</h2>
+  <div id="bgbox" class="bg"></div>
+  <br><small>The way social sites paint avatars and promo tiles.</small>
+</section>
+
+<section>
+  <h2>E. A face (must be burned whole, never read)</h2>
+  <img id="face" alt="profile photo of Priya" width="96" height="96" style="border-radius:50%">
+</section>
+
+<script>
+  function draw(w, h, lines, bg) {
+    const c = document.createElement("canvas");
+    c.width = w; c.height = h;
+    const x = c.getContext("2d");
+    x.fillStyle = bg || "#fff"; x.fillRect(0, 0, w, h);
+    x.fillStyle = "#111"; x.font = "22px Arial, Helvetica, sans-serif"; x.textBaseline = "top";
+    lines.forEach((t, i) => x.fillText(t, 20, 18 + i * 34));
+    return c;
+  }
+
+  // B. banner: same phone as section A, plus a card-shaped number
+  document.getElementById("banner").src = draw(620, 120, [
+    "Call 98765 43210 for offers",
+    "Card 4111 1111 1111 1111 accepted",
+  ], "#fff7e0").toDataURL("image/png");
+
+  // C. canvas document: Aadhaar (valid Verhoeff), PAN, email from A, and prose
+  const doc = document.getElementById("doc").getContext("2d");
+  doc.fillStyle = "#fff"; doc.fillRect(0, 0, 700, 220);
+  doc.fillStyle = "#111"; doc.font = "22px Arial, Helvetica, sans-serif"; doc.textBaseline = "top";
+  ["Applicant: Rahul Verma",
+   "Aadhaar 3456 7890 1238",
+   "PAN AAACR5055K",
+   "Email priya.sharma@example.in",
+   "This sentence is ordinary text and must stay readable."]
+    .forEach((t, i) => doc.fillText(t, 20, 18 + i * 38));
+
+  // D. background image with a phone
+  document.getElementById("bgbox").style.backgroundImage =
+    `url(${draw(520, 90, ["WhatsApp +91 98765 43210"], "#e8f4ff").toDataURL("image/png")})`;
+
+  // E. a "face": a coloured blob, alt text says photo
+  const f = draw(96, 96, [], "#d9a066");
+  const fx = f.getContext("2d"); fx.fillStyle = "#333"; fx.beginPath(); fx.arc(48, 40, 22, 0, 7); fx.fill();
+  document.getElementById("face").src = f.toDataURL("image/png");
+</script>
+</body>
+</html>

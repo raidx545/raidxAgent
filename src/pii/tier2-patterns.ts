@@ -25,6 +25,15 @@ interface Rule {
 
 const RULES: Rule[] = [
   {
+    // Sixteen digits before twelve, so a VID is not reported as an Aadhaar
+    // number that happens to have four digits after it.
+    kind: "aadhaar",
+    pattern: /\b[2-9]\d{3}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}\b/g,
+    validate: check.isAadhaarVid,
+    confidence: "certain",
+    why: "16-digit Aadhaar Virtual ID, valid Verhoeff check digit",
+  },
+  {
     kind: "aadhaar",
     pattern: /\b[2-9]\d{3}[\s-]?\d{4}[\s-]?\d{4}\b/g,
     validate: check.isAadhaar,
@@ -32,32 +41,50 @@ const RULES: Rule[] = [
     why: "12 digits, valid Verhoeff check digit",
   },
   {
+    // A card whose issuer we recognise. The Luhn check alone passes one random
+    // number in ten - which is every tenth order id, tracking number and
+    // account number on a shopping site - so an unknown issuer is not enough.
     kind: "payment_card",
     pattern: /\b(?:\d[ -]?){12,18}\d\b/g,
-    validate: check.isPaymentCard,
+    validate: (raw) => check.isPaymentCard(raw) && !!check.cardBrand(raw.replace(/[\s-]/g, "")),
     confidence: "certain",
-    why: "13–19 digits, valid Luhn check digit",
+    why: "13–19 digits, valid Luhn check digit, known card issuer",
   },
   {
+    kind: "payment_card",
+    pattern: /\b(?:\d[ -]?){12,18}\d\b/g,
+    validate: (raw) => check.isPaymentCard(raw) && !check.cardBrand(raw.replace(/[\s-]/g, "")),
+    confidence: "medium",
+    why: "13–19 digits with a valid Luhn check digit, unknown issuer, beside a card cue",
+  },
+  {
+    // Spaces are allowed where a form shows them: "AAACR 5055 K".
     kind: "pan",
-    pattern: /\b[A-Za-z]{5}\d{4}[A-Za-z]\b/g,
+    pattern: /\b[A-Za-z]{5}\s?\d{4}\s?[A-Za-z]\b/g,
     validate: check.isPan,
     confidence: "certain",
     why: "PAN format with a valid holder-type character",
   },
   {
     kind: "gstin",
-    pattern: /\b\d{2}[A-Za-z]{5}\d{4}[A-Za-z][0-9A-Za-z]Z[0-9A-Za-z]\b/g,
+    pattern: /\b\d{2}\s?[A-Za-z]{5}\s?\d{4}\s?[A-Za-z]\s?[0-9A-Za-z]\s?[Zz]\s?[0-9A-Za-z]\b/g,
     validate: check.isGstin,
     confidence: "certain",
     why: "GSTIN format with a valid mod-36 check character",
   },
   {
     kind: "ifsc",
-    pattern: /\b[A-Z]{4}0[A-Z0-9]{6}\b/g,
-    validate: check.isIfsc,
+    pattern: /\b[A-Za-z]{4}0[A-Za-z0-9]{6}\b/g,
+    validate: check.isKnownIfsc,
+    confidence: "certain",
+    why: "IFSC of a known bank",
+  },
+  {
+    kind: "ifsc",
+    pattern: /\b[A-Za-z]{4}0[A-Za-z0-9]{6}\b/g,
+    validate: (raw) => check.isIfsc(raw) && !check.isKnownIfsc(raw),
     confidence: "high",
-    why: "IFSC format: bank code, reserved 0, branch code",
+    why: "IFSC format beside a banking cue",
   },
   {
     kind: "email",
@@ -66,20 +93,71 @@ const RULES: Rule[] = [
     why: "RFC-shaped email address",
   },
   {
-    kind: "upi_id",
-    // Deliberately narrow: a VPA handle looks like an email but the suffix is
-    // a known PSP handle, not a domain.
+    // "priya [at] example [dot] in". Written that way to defeat scrapers, and a
+    // language model reads it as easily as the plain form - so it has to be
+    // treated as one. Both an "at" and at least one "dot" are required.
+    kind: "email",
     pattern:
-      /\b[A-Za-z0-9._-]{3,}@(?:ok(?:hdfcbank|icici|axis|sbi)|paytm|ybl|ibl|axl|upi|apl|jupiteraxis|fam|superyes)\b/gi,
+      /\b[A-Za-z0-9._%+-]+\s*(?:\[\s*at\s*\]|\(\s*at\s*\)|\{\s*at\s*\}|<\s*at\s*>|\s+AT\s+|\s+at\s+)\s*[A-Za-z0-9-]+(?:\s*(?:\[\s*dot\s*\]|\(\s*dot\s*\)|\{\s*dot\s*\}|<\s*dot\s*>|\s+DOT\s+|\s+dot\s+)\s*[A-Za-z0-9-]+)+\b/g,
+    validate: check.isObfuscatedEmail,
     confidence: "high",
-    why: "UPI virtual payment address with a known PSP handle",
+    why: "email address written with 'at' and 'dot' spelled out",
   },
   {
+    kind: "upi_id",
+    // A VPA looks like an email but the suffix is a payment handle, not a
+    // domain. The list is the PSP and bank handles in circulation.
+    pattern:
+      /\b[A-Za-z0-9._-]{3,}@(?:ok(?:hdfcbank|icici|axis|sbi)|wa(?:hdfcbank|icici|axis|sbi)|paytm|ybl|ibl|axl|upi|apl|yapl|rapl|jupiteraxis|fam|superyes|icici|hdfcbank|sbi|axisbank|kotak|indus|federal|barodampay|cnrb|pnb|boi|uboi|idfcbank|yesbank|airtel|freecharge|mobikwik|pingpay|slice|timecosmos|naviaxis|niyoicici|postbank|dbs|abfspay|citi|hsbc|sc|rbl|kmbl|aubank|dlb|kbl|sib|tjsb|ikwik|pockets|goaxis|amazonpay|shriramhdfcbank|ptyes|ptaxis|ptsbi|pthdfc)\b/gi,
+    confidence: "high",
+    why: "UPI virtual payment address with a known handle",
+  },
+  {
+    // Every spelling of an Indian mobile a page uses: "98765 43210",
+    // "9876543210", "+91 98765 43210", "+919876543210", "09876543210",
+    // "(91) 98765-43210", "9876 543 210". The pattern is permissive about
+    // grouping and the validator is strict about the digits, which is the
+    // right way round - the old pattern insisted on a 5-5 split and a word
+    // boundary between "91" and the number, and missed most of the above.
     kind: "phone",
-    pattern: /(?:\+?91[\s-]?)?\b[6-9]\d{4}[\s-]?\d{5}\b/g,
+    // The groupings people actually write - and only those. A first draft took
+    // "any 2-5 digit chunks adding to ten", and a stress run found what that
+    // costs: "INV-7135-391841" and "Ref 634795 5590" both became phone numbers.
+    // Nobody writes a mobile as 4-6 with a hyphen or as 6-4 at all.
+    //
+    // The lookbehind refuses a run glued to an identifier prefix ("INV-",
+    // "REF/", "#"): a phone number is preceded by a space, a colon, or a
+    // country code, never by "V-".
+    pattern:
+      /(?<!\d)(?<![A-Za-z0-9][-\/#])(?:\+\s?91[\s-]?|\(\+?91\)[\s-]?|91[\s-]|0[\s-]?)?(?:[6-9]\d{9}|[6-9]\d{4}[\s-]\d{5}|[6-9]\d{3}[\s-]\d{3}[\s-]\d{3}|[6-9]\d{2}[\s-]\d{3}[\s-]\d{4})(?!\d)/g,
     validate: check.isIndianMobile,
     confidence: "high",
     why: "Indian mobile number: starts 6–9, ten digits",
+  },
+  {
+    // The 4-6 split - "9876 543210" - is real but uncommon, and two adjacent
+    // reference numbers make the same shape often enough that a stress run
+    // measured the cost. It is kept, but only beside a telephone cue.
+    kind: "phone",
+    pattern:
+      /(?<!\d)(?<![A-Za-z0-9][-\/#])(?:\+\s?91[\s-]?|0[\s-]?)?[6-9]\d{3}\s\d{6}(?!\d)/g,
+    validate: check.isIndianMobile,
+    confidence: "high",
+    why: "Indian mobile written 4-6, beside a telephone cue",
+  },
+  {
+    kind: "phone",
+    pattern: /(?<!\d)(?<![A-Za-z0-9][-\/#])0\d{2,4}[\s-]?\d{3,4}[\s-]?\d{3,4}(?!\d)/g,
+    validate: check.isIndianLandline,
+    confidence: "medium",
+    why: "Indian landline: trunk 0, STD code, subscriber number, beside a telephone cue",
+  },
+  {
+    kind: "phone",
+    pattern: /\+\d{1,3}[\s-]?(?:\(\d{1,4}\)[\s-]?)?\d(?:[\s-]?\d){6,12}/g,
+    validate: check.isInternationalPhone,
+    confidence: "medium",
+    why: "international number in +country-code form",
   },
   {
     kind: "passport",
@@ -111,8 +189,10 @@ const RULES: Rule[] = [
   {
     kind: "date_of_birth",
     // Only dates sitting next to a birth-date cue; a bare date is not PII.
+    // Numeric and written-month forms alike: "14/08/1991", "1991-08-14",
+    // "14 August 1991", "August 14, 1991", "14-Aug-91".
     pattern:
-      /\b(?:dob|d\.o\.b\.?|date of birth|born(?: on)?)\b[:\s]*(\d{1,2}[/\-.]\d{1,2}[/\-.]\d{2,4}|\d{4}[/\-.]\d{1,2}[/\-.]\d{1,2})/gi,
+      /\b(?:dob|d\.o\.b\.?|date\s+of\s+birth|birth\s*date|birthday|born(?:\s+on)?)\b[:\s]*((?:\d{1,2}[/\-.]\d{1,2}[/\-.]\d{2,4})|(?:\d{4}[/\-.]\d{1,2}[/\-.]\d{1,2})|(?:\d{1,2}[\s\-/.]*(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?,?[\s\-/.]*\d{2,4})|(?:(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?\s+\d{1,2},?\s+\d{2,4}))/gi,
     confidence: "high",
     why: "date immediately following a birth-date label",
   },
@@ -132,6 +212,21 @@ const NEEDS_CONTEXT = new Map<PiiKind, RegExp>([
   ["passport", /\b(passport|travel document)\b/i],
 ]);
 
+/**
+ * Context demanded of specific *rules*, not whole kinds, keyed on their `why`.
+ * A landline shares its kind with a mobile number, but only the landline is
+ * weak enough to need a cue; the same goes for a card with no known issuer.
+ */
+const RULE_CONTEXT = new Map<string, RegExp>([
+  ["Indian landline: trunk 0, STD code, subscriber number, beside a telephone cue",
+    /\b(tel|telephone|phone|ph|landline|office|contact|call|fax|helpline|toll[\s-]?free|board|reception)\b/i],
+  ["13–19 digits with a valid Luhn check digit, unknown issuer, beside a card cue",
+    /\b(card|credit|debit|visa|master(?:card)?|rupay|amex|maestro|payment|cvv)\b/i],
+  ["IFSC format beside a banking cue", /\b(ifsc|bank|branch|neft|rtgs|imps|swift)\b/i],
+  ["Indian mobile written 4-6, beside a telephone cue",
+    /\b(mob|mobile|ph|phone|tel|telephone|call|whatsapp|contact|cell|sms)\b/i],
+]);
+
 /** Fields whose contents tier 1 already covered; no need to re-scan. */
 const SCANNED_FIELDS: Field[] = [
   "text",
@@ -147,6 +242,9 @@ const SCANNED_FIELDS: Field[] = [
   "attr:data-hovercard-id",
   "attr:name",
   "attr:aria-label",
+  "attr:data-name",
+  "attr:data-user-name",
+  "attr:data-sender",
 ];
 
 let seq = 0;
@@ -185,9 +283,15 @@ function dedupe(findings: Finding[]): Finding[] {
   return kept;
 }
 
-function scanText(node: CapturedNode, field: Field, text: string): Finding[] {
+function scanText(node: CapturedNode, field: Field, original: string): Finding[] {
   const found: Finding[] = [];
-  if (!text) return found;
+  if (!original) return found;
+
+  // Match against a copy with every script's digits made ASCII. The copy has
+  // the same length as the original, so spans found in one index the other,
+  // and the value reported is always sliced from the original - which is what
+  // the tokenizer will later compare it against.
+  const text = check.normaliseDigits(original);
 
   for (const rule of RULES) {
     rule.pattern.lastIndex = 0;
@@ -211,11 +315,19 @@ function scanText(node: CapturedNode, field: Field, text: string): Finding[] {
         continue;
       }
 
-      const context = NEEDS_CONTEXT.get(rule.kind);
+      const context = NEEDS_CONTEXT.get(rule.kind) ?? RULE_CONTEXT.get(rule.why);
       if (context) {
         const window = text.slice(Math.max(0, start - 60), start + raw.length + 60);
         if (!context.test(window)) continue;
       }
+
+      // A phone-shaped run wrapped in a longer digit run - part of a card or
+      // account number - is not a phone number. Any rule that can be a
+      // substring of another kind's match is settled in dedupe by length; this
+      // only trims whitespace the permissive patterns may have picked up.
+      const value = original.slice(start, start + raw.length).replace(/\s+$/, "");
+      const end = start + value.length;
+      if (value.length === 0) continue;
 
       found.push({
         id: `t2-${seq++}`,
@@ -225,9 +337,9 @@ function scanText(node: CapturedNode, field: Field, text: string): Finding[] {
         confidence: rule.confidence,
         nodeId: node.id,
         field,
-        span: [start, start + raw.length],
-        value: raw,
-        masked: mask(raw),
+        span: [start, end],
+        value,
+        masked: mask(value),
         bbox: node.bbox,
         why: rule.why,
         action: "replace-span",

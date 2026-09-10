@@ -1,3 +1,4 @@
+import { remoteOcr } from "../background/ocr-remote";
 import type { Capture, CapturedNode } from "../capture/types";
 import { walkCapture } from "../capture/dom";
 import type { Finding } from "../pii/types";
@@ -461,7 +462,9 @@ async function scan(): Promise<void> {
       return reply?.ok ? reply.rects : [];
     };
 
-    sanitized = await sanitize(original, vaultSource, undefined, resolveRects);
+    // The inspector is an extension page, so it can reach the offscreen
+    // engine the same way the service worker does.
+    sanitized = await sanitize(original, vaultSource, undefined, resolveRects, remoteOcr());
     vaultSize = (await vaultView()).size;
   } catch (error) {
     setStatus(error instanceof Error ? error.message : String(error), true);

@@ -1,4 +1,4 @@
-import type { ProviderId } from "../background/providers/types";
+import type { ProviderId, ReasoningEffort } from "../background/providers/types";
 import type { DomCapture } from "../capture/types";
 import type { MintRequest } from "../vault/protocol";
 import type { SpanRectRequest, SpanRectResult } from "../capture/spans";
@@ -37,6 +37,7 @@ export interface PageSnapshot {
 }
 
 export type ActionName =
+  | "ask_user"
   | "click"
   | "type"
   | "select"
@@ -93,6 +94,8 @@ export interface ActionResult {
 export type ContentRequest =
   | { kind: "act"; action: AgentAction }
   | { kind: "capture" }
+  /** Wait for the DOM to stop changing, so a fresh page is measured once it has settled. */
+  | { kind: "settle" }
   /** Prepare the page for a full-page capture; returns its dimensions. */
   | { kind: "fullpage-begin" }
   /** Scroll to a document offset and report where we actually landed. */
@@ -130,6 +133,12 @@ export type AgentEvent =
       kind: "confirm";
       id: string;
       summary: string;
+    }
+  /** The agent needs something only the user knows before it can go on. */
+  | {
+      kind: "question";
+      id: string;
+      question: string;
     };
 
 /** Side panel -> service worker commands. */
@@ -138,6 +147,7 @@ export type PanelCommand =
   | { kind: "stop" }
   | { kind: "reset" }
   | { kind: "confirm-reply"; id: string; approved: boolean }
+  | { kind: "question-reply"; id: string; answer: string }
   | { kind: "get-state" }
   /** Capture + PII scan of a tab. Standalone — does not involve the planner. */
   | { kind: "inspect"; tabId?: number; fullPage?: boolean }
@@ -163,6 +173,27 @@ export interface Settings {
   models: Record<ProviderId, string>;
   /** Hard ceiling on planner turns, so a confused agent cannot spin forever. */
   maxSteps: number;
+  /**
+   * How much reasoning the planner buys before each action.
+   *
+   * "off" is the original behaviour: the model answers straight away. The
+   * other two let it work out its approach first, which is what keeps it from
+   * repeating an action without ever asking why the last one did nothing.
+   * Costs reasoning tokens and adds a second or two per step.
+   */
+  reasoningEffort: ReasoningEffort;
+  /**
+   * Read text out of the screenshot's pixels before it is sent.
+   *
+   *   "images" - every image-shaped region: pictures, canvases, background
+   *              images. The text the DOM cannot see is in these.
+   *   "full"   - the whole screenshot as well. Slower; catches text rendered
+   *              in ways no detector anticipated.
+   *   "off"    - the tree's own text is the only text that is covered.
+   *
+   * Only meaningful while screenshots are being sent.
+   */
+  ocrMode: "off" | "images" | "full";
   /** Ask before click/type on anything that looks irreversible. */
   confirmRisky: boolean;
   /**
@@ -191,6 +222,8 @@ export const DEFAULT_SETTINGS: Settings = {
     openrouter: "anthropic/claude-opus-5",
   },
   maxSteps: 40,
+  reasoningEffort: "standard",
+  ocrMode: "images",
   confirmRisky: true,
   sendScreenshot: true,
   fullPageCapture: false,

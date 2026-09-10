@@ -5,7 +5,9 @@ import { fieldText, mask } from "./types";
 import {
   CITIES,
   HONORIFICS,
+  HONORIFIC_WORDS,
   NAME_CUES,
+  NEVER_STARTS_A_NAME,
   NOT_A_NAME,
   ORG_CONNECTORS,
   ORG_SUFFIXES,
@@ -94,17 +96,62 @@ const RE_ORG = new RegExp(
 );
 
 /**
- * A house or plot number followed by a street-type word.
+ * Varies only the first letter's case: "Road|Rd" -> "[Rr]oad|[Rr]d".
  *
- * The number half has to cope with "42", "17/B", "12-A", and "No. 8" - Indian
- * addresses combine digits and letters freely, and a pattern that only accepts
- * digits silently drops the first half of "17/B", leaving it in the output.
+ * The street regex used to carry the `i` flag, which made the *name* words
+ * case-insensitive too, so "62 to Sector 137" read as an address with "to" as
+ * its street name. Pages vary the case of "road"; they do not capitalise
+ * prepositions. So the street words tolerate case and the names do not.
+ */
+function caseTolerant(alternatives: string): string {
+  return alternatives
+    .split("|")
+    .map((alt) => {
+      const first = alt[0];
+      if (!first || !/[A-Za-z]/.test(first)) return alt;
+      return `[${first.toUpperCase()}${first.toLowerCase()}]${alt.slice(1)}`;
+    })
+    .join("|");
+}
+
+const STREET = caseTolerant(STREET_TYPES);
+const HOUSE_PREFIX = caseTolerant("No\\.?|Flat|Plot|Door|H\\.?\\s?No\\.?|Shop|Unit");
+
+/** "42", "17/B", "12-A", "2nd", "4B". Indian addresses mix all of these. */
+const HOUSE_NUMBER = `\\d+(?:st|nd|rd|th)?[A-Za-z]?(?:[/-][\\dA-Za-z]+)*`;
+
+/** Up to four genuinely capitalised words: "Brigade", "MG", "Rajaji". */
+const STREET_NAMES = `(?:[A-Z][A-Za-z'’.-]+\\s+){0,4}`;
+
+/** "Brigade Road", "Sector 15", "Floor 6", "Block C". */
+const STREET_SEGMENT = `${STREET_NAMES}(?:${STREET})\\b(?:[\\s-]+(?:\\d{1,3}[A-Za-z]?|[A-Z]))?`;
+
+/**
+ * A house or plot number followed by one or more street segments.
+ *
+ * "Flat 4B, 17/2 Brigade Road" carries two number tokens; "2nd Floor, MG Road"
+ * carries an ordinal and two comma-separated segments. Each is one address,
+ * and half an address left in the output is the failure this has to avoid.
  */
 const RE_STREET = new RegExp(
-  `\\b(?:(?:No\\.?|Flat|Plot|Door|H\\.?\\s?No\\.?|Shop|Unit)\\s*)?` +
-    `\\d+[A-Za-z]?(?:[/-][\\dA-Za-z]+)*,?\\s+` +
-    `(?:[A-Z][A-Za-z'’.-]+\\s+){0,4}(?:${STREET_TYPES})\\b`,
-  "gi",
+  `\\b(?:(?:${HOUSE_PREFIX})\\s*)?${HOUSE_NUMBER},?\\s+(?:${HOUSE_NUMBER},?\\s+)?` +
+    `${STREET_SEGMENT}(?:,\\s*${STREET_SEGMENT})*(?![\\p{L}\\d])`,
+  "gu",
+);
+
+/**
+ * Street words strong enough to make an address without a house number in
+ * front: "MG Road", "Anna Salai", "Sector 15". "Floor" and "Tower" are not here
+ * - those need a number and a name to mean anything.
+ */
+const STRONG_STREET = caseTolerant(
+  "Road|Rd|Street|Marg|Salai|Lane|Nagar|Colony|Layout|Sector|Enclave|Vihar|Puram|Chowk|Avenue|Cross|Main|Gali|Mohalla|Extension|Extn|Bagh|Ganj|Peth|Wadi",
+);
+
+/** A named street with no number: an address line only when the page around it says so. */
+const RE_NAMED_STREET = new RegExp(
+  `(?<![\\p{L}\\d])(?:[A-Z][A-Za-z'’.-]+\\s+){1,3}(?:${STRONG_STREET})\\b(?![\\p{L}\\d])`,
+  "gu",
 );
 
 /** Six-digit Indian PIN, which never starts with zero. */
@@ -253,6 +300,79 @@ function plausibleName(phrase: string): boolean {
 }
 
 /**
+ * A gentler plausibility test, for names that arrive with evidence attached.
+ *
+ * `plausibleName` rejects a phrase if *any* word is on the stopword list, which
+ * is right for a bare capitalised run and wrong for a name introduced by "Bill
+ * to:" or "Dr" - it threw away "Bharat Kumar" because Bharat is also the
+ * country, and "May Fernandes" because May is also a month. When a cue has
+ * already said "a name follows", only two things disqualify what follows: it
+ * starts with a word no name can start with, or every word in it is a
+ * stopword.
+ */
+function plausibleWithEvidence(phrase: string): boolean {
+  if (/<[A-Z][A-Z0-9]*_\d+>/.test(phrase)) return false;
+
+  const words = phrase.trim().split(/\s+/).filter(Boolean);
+  if (words.length === 0 || words.length > 5) return false;
+
+  const bare = (w: string): string => w.replace(/[^\p{L}]/gu, "").toLowerCase();
+  if (NEVER_STARTS_A_NAME.has(bare(words[0]))) return false;
+
+  const meaningful = words.filter((w) => bare(w).length > 1 && !ORG_CONNECTORS.has(bare(w)));
+  if (meaningful.length === 0) return false;
+  if (meaningful.every((w) => NOT_A_NAME.has(bare(w)))) return false;
+
+  if (PLACES.has(phrase.trim().toLowerCase())) return false;
+  return true;
+}
+
+/** Strips honorifics off the front: "Mr. Rahul Verma" -> "Rahul Verma". */
+function stripHonorific(phrase: string): { phrase: string; shift: number } {
+  let shift = 0;
+  let rest = phrase;
+  for (;;) {
+    const match = /^(\S+)(\s+)/.exec(rest);
+    if (!match) break;
+    const bare = match[1].replace(/[^\p{L}]/gu, "").toLowerCase();
+    if (!HONORIFIC_WORDS.has(bare)) break;
+    shift += match[0].length;
+    rest = rest.slice(match[0].length);
+  }
+  return { phrase: rest, shift };
+}
+
+/** Every street-type word, lowercased, so a street word never passes as a name. */
+const STREET_WORDS = new Set(
+  STREET_TYPES.split("|").map((w) => w.replace(/[^A-Za-z]/g, "").toLowerCase()),
+);
+const PREFIX_WORDS = new Set(["no", "flat", "plot", "door", "h", "shop", "unit", "room"]);
+
+function addressHasSubstance(phrase: string): boolean {
+  const words = phrase.split(/[\s,]+/).filter(Boolean);
+  const alpha = words.filter((w) => /^[A-Za-z][A-Za-z'.-]*$/.test(w));
+  if (alpha.length === 0) return false;
+
+  const bare = (w: string): string => w.toLowerCase().replace(/[^a-z]/g, "");
+
+  // Any strong street word anywhere makes it an address: "2nd Floor, MG Road".
+  const strong = new Set(
+    "road rd street marg salai lane nagar colony layout sector enclave vihar puram chowk avenue cross main gali mohalla extension extn bagh ganj peth wadi".split(" "),
+  );
+  if (alpha.some((w) => strong.has(bare(w)))) return true;
+
+  // Otherwise only weak words are present - "Floor 6, Tower 9" - and something
+  // has to be *named*: a capitalised word that is not itself a street word or
+  // a house prefix.
+  return alpha.some(
+    (w) => /^[A-Z]/.test(w) && !STREET_WORDS.has(bare(w)) && !PREFIX_WORDS.has(bare(w)),
+  );
+}
+
+/** Does the phrase carry an organisation marker anywhere, not only at the end? */
+const RE_ORG_WORD = new RegExp(`(?:^|\\s)(?:${ORG_SUFFIXES})(?=\\s|$)`, "i");
+
+/**
  * Drops leading words that cannot start a name.
  *
  * A greedy pattern happily swallows the sentence in front of what it was
@@ -308,7 +428,8 @@ function buildGazetteer(capture: DomCapture, priorFindings: Finding[]): Map<stri
     // Two characters is not a name; forty is a sentence.
     if (value.length < 3 || value.length > 60) return;
     if (!/[A-Za-z]/.test(value)) return;
-    if (!plausibleName(value)) return;
+    // The page declared this in its own markup; that is strong evidence.
+    if (!plausibleWithEvidence(value)) return;
     gazetteer.set(value, kind);
   };
 
@@ -498,19 +619,22 @@ export const tier3Entities: Detector = {
 
         // -- 2. honorific ---------------------------------------------------
         collect(RE_HONORIFIC, text, (phrase, start) => {
-          const { phrase: name, shift } = trimLeading(phrase);
-          if (!plausibleName(name)) return;
+          // A stacked title - "Dr Mr" - is still not part of the name.
+          const { phrase: name, shift } = stripHonorific(phrase);
+          if (!plausibleWithEvidence(name)) return;
           propose("person_name", [start + shift, start + shift + name.length], name, "high",
             "follows a title such as Mr or Dr");
         });
 
         // -- 3. cue phrase --------------------------------------------------
         collect(RE_CUE, text, (phrase, start) => {
-          const { phrase: name, shift } = trimLeading(phrase);
-          if (!plausibleName(name)) return;
-          const kind: PiiKind = new RegExp(`(?:${ORG_SUFFIXES})$`).test(name)
-            ? "org_name"
-            : "person_name";
+          // The cue is the evidence, so the words after it are not second-
+          // guessed one by one. An honorific in front of the name is dropped;
+          // "Dear Mr. Rahul Verma" names Rahul Verma.
+          const { phrase: name, shift } = stripHonorific(phrase);
+          if (!plausibleWithEvidence(name)) return;
+          // "Bank of Baroda" is an organisation: the marker is at the front.
+          const kind: PiiKind = RE_ORG_WORD.test(name) ? "org_name" : "person_name";
           propose(kind, [start + shift, start + shift + name.length], name, "high",
             "follows a phrase that introduces a person or company");
         });
@@ -536,8 +660,31 @@ export const tier3Entities: Detector = {
         while ((street = RE_STREET.exec(text)) !== null) {
           const phrase = trimPhrase(street[0]);
           if (phrase.length < 6) continue;
+          // "Room 604, Floor 6" is a place inside a building, not an address:
+          // a weak street word with no name in front of it names nothing.
+          // "17/2 Brigade Road" and "H. No. 8, Sector 15" both carry a name or a
+          // strong street word and are addresses.
+          if (!addressHasSubstance(phrase)) continue;
           propose("postal_address", [street.index, street.index + phrase.length], phrase, "high",
             "house number followed by a street-type word");
+        }
+
+        // A named street with no house number - "MG Road", "Anna Salai" - is
+        // an address line when the page around it is talking about a place:
+        // a PIN, a city or state, or an address word within reach. Without
+        // that, "Wall Street" is a newspaper and "Abbey Road" is a record.
+        RE_NAMED_STREET.lastIndex = 0;
+        let named: RegExpExecArray | null;
+        while ((named = RE_NAMED_STREET.exec(text)) !== null) {
+          const phrase = trimPhrase(named[0]);
+          const around = text.slice(Math.max(0, named.index - 80), named.index + phrase.length + 80).toLowerCase();
+          const placeNearby =
+            /\b[1-9]\d{5}\b/.test(around) ||
+            [...PLACES].some((p) => around.includes(p)) ||
+            /\b(address|located|near|opp|opposite|behind|next to|pincode|pin|landmark|branch office|regd\.? office|registered office)\b/.test(around);
+          if (!placeNearby) continue;
+          propose("postal_address", [named.index, named.index + phrase.length], phrase, "medium",
+            "named street beside a place name or address cue");
         }
 
         // A PIN code only counts with a place name or an address cue nearby.

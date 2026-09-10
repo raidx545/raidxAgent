@@ -505,6 +505,94 @@ becomes *"(not captured — you would need to enter this yourself)"* rather than
 raw `<SECRET_10>`, and one the vault never issued is flagged loudly — an
 invented placeholder means an invented claim.
 
+## What the loop sends, and what it stopped sending
+
+A step appends a fresh page render to the history. By turn ten the planner was
+being handed **ten page snapshots, nine of which described pages that no longer
+existed** — full of element ids that had since been reissued to different
+elements. That is not only cost; it is precisely the material a planner needs
+in order to click the wrong thing.
+
+`pruneStalePages()` keeps the newest page and replaces the others with a line
+saying they are superseded. Everything else — reasoning, outcomes, tool-call ids
+— survives untouched, because breaking a call/result pair makes a provider
+reject the whole conversation.
+
+| | Before | After |
+|---|---|---|
+| Page blocks on turn 10 | 10 | **1** |
+| Final-turn payload | 13,964 chars | **3,034** |
+| Sent across a 10-step task | 76,460 chars | **22,010** |
+
+Measured in `history.test.ts` on a 40-element page, so the ratio moves with page
+size — the test asserts the effect is large rather than pinning a number.
+
+Three smaller fixes alongside it:
+
+- **The send-time scan was O(turns²).** It re-read the entire history every turn,
+  though earlier messages were scanned when they were new and had not changed.
+  It now scans only what it has not seen.
+- **`max_tokens` was treated as a finished answer.** A model that ran out of room
+  mid-thought produced a truncated reply presented as complete. It is now
+  reported as truncation.
+- **A closed or crashed tab threw mid-loop.** Ordinary events; they now end the
+  task with a sentence rather than an unhandled error.
+
+## Tool results are part of the payload
+
+Action results are built in the page and in the tabs API — an element's inner
+text, matched page text, tab titles, full URLs — and go straight into the
+conversation. That was a whole channel into the payload which bypassed every
+other control.
+
+The worst case was self-inflicted: typing reported the value back verbatim.
+
+```
+planner sends   type <EMAIL_1> into element 12
+resolved to     thisdotthis@gmail.com          (correct, at the keystroke)
+result said     Typed "thisdotthis@gmail.com" into <input>   <-- straight into the payload
+```
+
+Two fixes. The result no longer echoes the text at all — the planner supplied a
+token, already knows what it asked for, and will see the field's tokenized value
+in the next page read. And every result detail now goes through the vault before
+it enters the conversation, which also covers `find_text` hits, tab titles and
+URLs.
+
+## Two failures found by running it on Gmail
+
+Neither showed up in any fixture. Both are recorded here because the class of
+mistake matters more than the instance.
+
+**The compose dialog was outside the render budget** — and this took two goes to
+fix, which is the interesting part.
+
+`renderPage` truncated at 400 lines in document order, and a mail client appends
+its compose window near the *end* of the DOM after thousands of inbox rows. The
+agent clicked Compose, was shown a page with no compose window, concluded
+nothing had happened, and clicked again — forever.
+
+The first fix dropped off-screen lines before visible ones. Right, and not
+enough: a real inbox has several hundred *visible* elements of its own, so the
+budget was still exhausted before the dialog. The planner was then told "a
+dialog is open" while being shown none of it — worse than silence, because it
+was told its click had worked and still could not act on the result.
+
+The budget is now spent by importance: **an open modal wins outright**, then
+what is on screen, then the rest. The page behind a modal is not interactive, so
+rendering four hundred rows nobody can click in preference to the fields
+somebody is typing into had it exactly backwards.
+
+**The document title leaked on every single turn.** A mail client puts the
+signed-in address there — `Inbox (2,179) - someone@gmail.com - Gmail` — and the
+title is not a node, so nothing in the tree walk rewrote it while every payload
+rendered it. Worse, the residual check walks nodes too, so it could never have
+seen this. Both are fixed: the title is taken from the sanitized root label, and
+the residual check now also scans the capture's own fields.
+
+The send-time scan is what caught it, on a real page, in a way no fixture would
+have. That is the argument for checking continuously rather than once in CI.
+
 ## Seeing what the model got
 
 Side panel &rarr; **Wire log** ([`wirelog.html`](src/wirelog/)) lists every
@@ -537,6 +625,56 @@ needs both:
 pipeline over it, rather than a second simpler path that would drift from the
 first.
 
+## The task catalogue
+
+`test/tasks.test.ts` drives **110 real tasks** through the machinery that
+decides whether a task is possible: the capture is sanitized, the page is
+rendered as the planner would see it, the control the task needs is looked up in
+that render, and the safety gate is asked about the decisive action.
+
+| Category | Passing | Examples |
+|---|---|---|
+| read | 15/15 | summarise a page, check stock, read an invoice |
+| find | 10/10 | search mail, filter orders, page through results |
+| navigate | 8/8 | open a message, go back, load more |
+| form | 20/20 | set a quantity, change a language, fill an address |
+| compose | 15/15 | write, cc, attach, reply, forward, discard |
+| consequential | 18/18 | buy, place order, transfer, delete account |
+| credential | 7/7 | passwords and OTPs refused, identifiers confirmed |
+| scale | 4/4 | a 900-row order list, a compose dialog behind it |
+| adversarial | 5/5 | an injected instruction, an opaque frame |
+| privacy | 8/8 | forward an invoice without leaking the invoice |
+
+**What this does not test is the model's judgement** — whether it picks the
+right element, in the right order, and knows when it is done. That needs a real
+provider and real pages. Everything up to the model's decision is here.
+
+A failure reports which of four things went wrong: the control was *invisible*
+to the planner, the *gate* disagreed with what the task needs, a value *leaked*,
+or the page became *unusable*.
+
+### What the first run found
+
+Six failures. Three were real:
+
+- **A field labelled "Display name" was never detected.** The keyword list only
+  knew the formal wordings — "Full name", "Surname" — so a real name went
+  through untouched on a settings page with no other signal.
+- **Aadhaar and PAN were refused outright**, classed as credentials. That made
+  every government form impossible: the single most valuable thing the agent
+  could do was the one thing it would not. Secrets and identifiers are now
+  separate — a password authenticates and is refused; an identifier is asked for
+  and is confirmed, unconditionally, whatever the confirmation setting says.
+- **"PAN Card Number" matched the credit-card pattern** (`card number`), so
+  India's tax identifier was refused as a payment card. Identifiers are now
+  settled before secrets, and the order is pinned by a test.
+
+The other three were wrong expectations of mine, which is worth recording:
+adding to a cart is reversible and should not be confirmed; signing in creates
+nothing, and the password field is refused anyway; and a merchant name in a bank
+statement *should* be tokenized — the task still works because the token is
+stable, and the user reads the real name once the answer is resolved.
+
 ## Tests
 
 ```bash
@@ -552,7 +690,11 @@ Four suites, all Node-runnable:
 | `vault` | Token stability, sealed tokens never resolve, `JSON.stringify` cannot leak, page-planted tokens neutralised |
 | `entities` | Gazetteer propagates a labelled name into prose; honorifics, cues, legal suffixes, addresses; **zero false positives on a decoy block** of ordinary capitalised text; aggressive mode stays opt-in |
 | `replay` | The two-pass vault path produces a **byte-identical** tree to the direct path, in one round trip; the replay guard throws on divergence |
+| `tasks` | **110 real tasks** across ten categories — see above |
+| `gates` | Compose fields are not interrupted, Send and Discard still are, identifiers confirmed, secrets refused even with confirmation off |
 | `inbox` | A mail-client fixture: every sender detected from its annotation alone, a name inside Devanagari text, robot senders classed as brands, and **the interface still readable** — "Compose", "Inbox", "Search mail" all survive |
+| `budget` | A 2,179-row inbox with a compose dialog last in the DOM: the dialog survives the render budget, on-screen rows are kept, far-below-the-fold rows are dropped and accounted for |
+| `history` | Only the newest page survives pruning; reasoning, outcomes and tool-call id pairs all survive intact; the saving is large; empty and single-page histories are left alone |
 | `wire` | **The exact string the model receives**: no secret in it, tokens present, element ids valid, the page still usable ("Password", `autocomplete=name`, "Forward this invoice" all survive), and the request joins to the page through the same token. Also: an identifier the user *typed* is tokenized even though the page never showed it, and the send-time scan finds nothing in the payload while still firing on raw text |
 | `sanitize` | **No secret survives into the serialised output**; residual is zero; sentence structure and form metadata preserved; original capture never mutated |
 

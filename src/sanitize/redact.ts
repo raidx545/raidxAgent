@@ -36,6 +36,8 @@ export interface RedactReport {
   textSpansCovered: number;
   /** Text findings whose position on screen could not be resolved. */
   textSpansUnresolved: number;
+  /** Regions of text read out of the pixels by OCR and painted over with their token. */
+  ocrSpansCovered: number;
   /**
    * Regions that lie outside the captured viewport.
    *
@@ -72,7 +74,7 @@ async function toBitmap(dataUrl: string): Promise<ImageBitmap> {
   return createImageBitmap(blob);
 }
 
-async function toDataUrl(canvas: OffscreenCanvas): Promise<string> {
+export async function canvasToDataUrl(canvas: OffscreenCanvas): Promise<string> {
   const blob = await canvas.convertToBlob({ type: "image/png" });
   const bytes = new Uint8Array(await blob.arrayBuffer());
 
@@ -98,7 +100,7 @@ async function toDataUrl(canvas: OffscreenCanvas): Promise<string> {
  * For a viewport shot the origin is the scroll offset, so the two collapse into
  * the same arithmetic and there is only one code path to get wrong.
  */
-function project(
+export function project(
   bbox: readonly [number, number, number, number],
   viewport: Viewport,
   shot: ScreenshotMeta,
@@ -111,6 +113,26 @@ function project(
     w: bbox[2] * shot.scale,
     h: bbox[3] * shot.scale,
   };
+}
+
+/**
+ * The inverse of `project`: a rectangle in screenshot pixels back to a
+ * viewport-relative CSS box. OCR finds text in the image and has to report it
+ * in the same frame every other finding uses.
+ */
+export function unproject(
+  rect: { x: number; y: number; w: number; h: number },
+  viewport: Viewport,
+  shot: ScreenshotMeta,
+): [number, number, number, number] {
+  const documentX = rect.x / shot.scale + shot.originX;
+  const documentY = rect.y / shot.scale + shot.originY;
+  return [
+    documentX - viewport.scrollX,
+    documentY - viewport.scrollY,
+    rect.w / shot.scale,
+    rect.h / shot.scale,
+  ];
 }
 
 /** A zero or nonsensical scale would collapse every burn rectangle to nothing. */
@@ -143,6 +165,7 @@ export async function redactScreenshot(
     regionsBurned: 0,
     textSpansCovered: 0,
     textSpansUnresolved: 0,
+    ocrSpansCovered: 0,
     regionsOutsideViewport: 0,
     regionsSkipped: 0,
     pixelsBurned: 0,
@@ -175,13 +198,19 @@ export async function redactScreenshot(
     for (const finding of regions) {
       // Mint the token first, unconditionally.
       //
-      // The collect pass asks the vault for one seal per burn-region finding,
+      // The collect pass asks the vault for one token per burn-region finding,
       // so this loop must consume exactly one per finding or the two sequences
-      // drift and the replay throws. Skipping the seal for a region that turns
-      // out to be off-image would do precisely that. An unused seal costs
-      // nothing - it has no value behind it - and the region genuinely exists
-      // on the page even when it is outside this particular image.
-      const token = vault.seal(finding.kind);
+      // drift and the replay throws. Skipping the mint for a region that turns
+      // out to be off-image would do precisely that. An unused token costs
+      // nothing, and the region genuinely exists on the page even when it is
+      // outside this particular image.
+      //
+      // A region with a value - text OCR read out of the pixels - is tokenized,
+      // so the picture and the tree agree on the name. A face has no value and
+      // is sealed.
+      const token = finding.value
+        ? vault.tokenize(finding.value, finding.kind)
+        : vault.seal(finding.kind);
 
       if (finding.bbox[2] <= 0 || finding.bbox[3] <= 0) {
         report.regionsSkipped++;
@@ -209,6 +238,23 @@ export async function redactScreenshot(
       }
       x = x0;
       y = y0;
+
+      // Text read out of the picture is covered the way tokenized text is -
+      // a tight dark bar with the token on it - so the planner reads the image
+      // as a page with placeholders, not as a page with holes in it.
+      if (finding.origin === "ocr") {
+        ctx.fillStyle = "#1d283a";
+        ctx.fillRect(x, y, w, h);
+        const fit = Math.max(7, Math.min(h * 0.72, w / Math.max(1, token.length * 0.58)));
+        ctx.font = `${Math.floor(fit)}px ui-monospace, monospace`;
+        ctx.fillStyle = "#9ec5ff";
+        ctx.textAlign = "left";
+        ctx.textBaseline = "middle";
+        ctx.fillText(token, x + 2, y + h / 2, w - 3);
+        report.ocrSpansCovered++;
+        report.pixelsBurned += w * h;
+        continue;
+      }
 
       // Destroy first. Everything after this point is decoration drawn on top
       // of pixels that are already gone.
@@ -260,7 +306,7 @@ export async function redactScreenshot(
       else report.textSpansUnresolved++;
     }
 
-    const out = await toDataUrl(canvas);
+    const out = await canvasToDataUrl(canvas);
     report.outputBytes = out.length;
     return { screenshot: out, report };
   } catch (error) {

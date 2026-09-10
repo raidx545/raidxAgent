@@ -32,14 +32,47 @@ export interface ToolOutcome {
 /** The conversation, in the one shape both adapters can translate from. */
 export type ConvMessage =
   | { role: "user"; content: string }
-  | { role: "assistant"; text: string; toolCalls: ToolCall[] }
+  | {
+      role: "assistant";
+      text: string;
+      toolCalls: ToolCall[];
+      /**
+       * The provider's own reasoning blocks from this turn, kept verbatim.
+       *
+       * Anthropic requires every thinking block to be handed back unmodified
+       * on the next request in a tool-use exchange - the signature is what
+       * proves the reasoning was not tampered with, and a turn that drops them
+       * is rejected. They are opaque to us: never read, edit, log or show
+       * them, only carry them.
+       */
+      reasoning?: unknown[];
+    }
   | { role: "tool"; results: ToolOutcome[] };
+
+/**
+ * How hard the planner should think before acting.
+ *
+ * "off" is the old behaviour. The other two buy reasoning tokens: the model
+ * works out its approach before committing to a tool call, which is what stops
+ * it from clicking the same button four times while never asking itself why
+ * the first three did nothing.
+ */
+export type ReasoningEffort = "off" | "standard" | "deep";
+
+/** Anthropic's thinking budget, in tokens, per effort level. */
+export const THINKING_BUDGET: Record<ReasoningEffort, number> = {
+  off: 0,
+  standard: 4000,
+  deep: 10000,
+};
 
 export type StopReason = "end_turn" | "tool_use" | "max_tokens" | "refusal";
 
 export interface PlannerTurn {
   text: string;
   toolCalls: ToolCall[];
+  /** Opaque reasoning blocks to replay on the next request. */
+  reasoning?: unknown[];
   stopReason: StopReason;
   /** Set when the provider declined outright. */
   refusal?: string;
@@ -61,6 +94,8 @@ export interface PlannerRequest {
    * back - so nothing in this codebase passes an unsanitized image here.
    */
   image?: string;
+  /** How much reasoning to buy before acting. Defaults to "standard". */
+  effort?: ReasoningEffort;
 }
 
 export interface Planner {

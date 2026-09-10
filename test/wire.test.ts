@@ -79,10 +79,20 @@ function build(): Capture {
     dom: {
       url: "https://billing.example.in/invoice/8871?customer=priya.sharma@example.in",
       origin: "https://billing.example.in",
-      title: "Invoice 8871",
+      // A mail client puts the signed-in address in the title. This is not a
+      // node, so nothing in the tree walk rewrites it, and it is rendered into
+      // every single payload.
+      title: "Inbox (2,179) - priya.sharma@example.in - Billing",
       capturedAt: 1_700_000_000_000,
       viewport: { width: 1280, height: 800, dpr: 2, scrollX: 0, scrollY: 0, pageHeight: 1600 },
-      root: n({ tag: "body", role: "document", children: nodes }),
+      // captureDom() always sets the root label from document.title; the
+      // fixture has to do the same or it is not testing the real shape.
+      root: n({
+        tag: "body",
+        role: "document",
+        label: "Inbox (2,179) - priya.sharma@example.in - Billing",
+        children: nodes,
+      }),
       stats: { examined: 40, kept: nodes.length + 1, pruned: 24 },
     },
   };
@@ -108,6 +118,13 @@ want(!wire.includes("invoice/8871"), "the URL path survived; it named the custom
 want(!/textbox "\+91/.test(wire), `a field label still shows the raw value: ${wire.match(/.*\+91.*/)?.[0]}`);
 want(!wire.includes("aria-label"), "aria-label leaked into the payload unscanned");
 want(wire.includes("URL: https://billing.example.in"), `the origin was lost: ${wire.slice(0, 80)}`);
+
+// The title is rendered into every payload and is not part of the tree.
+const titleLine = wire.split("\n").find((l) => l.startsWith("Title:")) ?? "";
+want(!titleLine.includes("priya.sharma@example.in"),
+  `the document title leaked an address into every payload: ${titleLine}`);
+want(titleLine.includes("<EMAIL_"), `the title was blanked rather than tokenized: ${titleLine}`);
+want(titleLine.includes("Inbox"), `the title lost its meaning: ${titleLine}`);
 want(sanitized.report.residual.length === 0,
   `residual: ${sanitized.report.residual.map((f) => f.kind).join(", ")}`);
 
@@ -220,6 +237,42 @@ want(revealed.unknown.length === 0, `unexpected unknown tokens: ${revealed.unkno
 const forged = vault.resolveAll("type <EMAIL_99> into the box");
 want(forged.unknown.includes("<EMAIL_99>"), "a forged token was not reported");
 want(forged.text.includes("<EMAIL_99>"), "a forged token was substituted with something");
+
+// ------------------------------------------- tool results are sanitized too
+//
+// Action results are built in the page and in the tabs API - element inner
+// text, matched page text, tab titles, full URLs - and go straight into the
+// conversation. That channel bypassed every other control: typing a resolved
+// value reported it back verbatim, which undid the tokenizing completely.
+{
+  const details = [
+    // What act.ts and executor.ts actually produce.
+    `Clicked <a "Priya Sharma">.`,
+    `Found 1 match(es):\n- Contact priya.sharma@example.in about the invoice.`,
+    `Switched to tab 7: Invoice for Sharma Traders Pvt Ltd.`,
+    `Went back. Now on https://billing.example.in/invoice/8871.`,
+  ];
+
+  for (const detail of details) {
+    const aligned = alignTask(detail, vault.values());
+    const { text: safe } = await sanitizeText(aligned, vault);
+
+    for (const secret of ["Priya Sharma", "priya.sharma@example.in", "Sharma Traders"]) {
+      if (safe.includes(secret)) {
+        fails.push(`LEAK via tool result: "${secret}" survived in ${JSON.stringify(safe)}`);
+      }
+    }
+  }
+
+  // Aligning must reuse the token the page already has, so the planner does not
+  // meet the same person under two names.
+  const clicked = alignTask(`Clicked <a "Priya Sharma">.`, vault.values());
+  want(clicked.includes(nameToken ?? "<NAME_?>"),
+    `a tool result minted a new token instead of reusing ${nameToken}: ${clicked}`);
+
+  // And the result must still say what happened.
+  want(clicked.startsWith("Clicked <a "), `the tool result lost its meaning: ${clicked}`);
+}
 
 console.log(JSON.stringify({
   alignedTask: aligned,

@@ -7,7 +7,7 @@ import type {
   StopReason,
   ToolSpec,
 } from "./types";
-import { PlannerError, parseArguments } from "./types";
+import { PlannerError, THINKING_BUDGET, parseArguments } from "./types";
 
 /** Splits a PNG data URL into the parts the API wants. */
 function imageBlock(dataUrl: string): Anthropic.ImageBlockParam | undefined {
@@ -31,6 +31,12 @@ export function toMessages(messages: ConvMessage[]): Anthropic.MessageParam[] {
 
     if (message.role === "assistant") {
       const content: Anthropic.ContentBlockParam[] = [];
+      // Thinking blocks come first and must be byte-identical to what the model
+      // produced - the signature is checked. A tool-use turn that drops them is
+      // rejected outright, which is why they are carried through the loop.
+      for (const block of message.reasoning ?? []) {
+        content.push(block as Anthropic.ContentBlockParam);
+      }
       if (message.text) content.push({ type: "text", text: message.text });
       for (const call of message.toolCalls) {
         content.push({ type: "tool_use", id: call.id, name: call.name, input: call.input });
@@ -79,7 +85,7 @@ export function createAnthropicPlanner(apiKey: string, model: string): Planner {
   return {
     label: `Anthropic ${model}`,
 
-    async run({ system, messages, tools, signal, onText, image }: PlannerRequest): Promise<PlannerTurn> {
+    async run({ system, messages, tools, signal, onText, image, effort = "standard" }: PlannerRequest): Promise<PlannerTurn> {
       const built = toMessages(messages);
 
       // Attach the screenshot to the newest user turn, so the model sees the
@@ -96,13 +102,23 @@ export function createAnthropicPlanner(apiKey: string, model: string): Planner {
         }
       }
 
+      // Extended thinking, when asked for. The budget is reasoning tokens the
+      // model spends working out its approach before it commits to a tool
+      // call - which is exactly the step that was missing when it clicked the
+      // same button four times without ever asking why the first three did
+      // nothing. max_tokens has to cover the budget as well as the reply.
+      const budget = THINKING_BUDGET[effort];
+      const thinking: Anthropic.ThinkingConfigParam | undefined =
+        budget > 0 ? { type: "enabled", budget_tokens: budget } : undefined;
+
       const stream = client.messages.stream(
         {
           model,
-          max_tokens: 8000,
+          max_tokens: 8000 + budget,
           system,
           tools: toTools(tools),
           messages: built,
+          ...(thinking ? { thinking } : {}),
         },
         { signal },
       );
@@ -129,9 +145,15 @@ export function createAnthropicPlanner(apiKey: string, model: string): Planner {
           input: parseArguments(block.input),
         }));
 
+      // Kept opaque and handed straight back on the next request.
+      const reasoning = response.content.filter(
+        (block) => block.type === "thinking" || block.type === "redacted_thinking",
+      );
+
       return {
         text,
         toolCalls,
+        ...(reasoning.length > 0 ? { reasoning } : {}),
         stopReason: toStopReason(response.stop_reason),
         refusal:
           response.stop_reason === "refusal"

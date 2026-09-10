@@ -1,4 +1,5 @@
 import type { AgentEvent, PanelCommand, TranscriptEntry } from "../shared/types";
+import { TranscriptView } from "./transcript";
 
 const $ = <T extends HTMLElement>(id: string): T =>
   document.getElementById(id) as T;
@@ -11,27 +12,15 @@ const stopBtn = $<HTMLButtonElement>("stop");
 const statusDot = $("status-dot");
 const confirmEl = $("confirm");
 const confirmText = $("confirm-text");
+const questionEl = $("question");
+const questionText = $("question-text");
+const questionInput = $<HTMLTextAreaElement>("question-input");
+let pendingQuestionId: string | null = null;
 
-/** Rendered entries, so patches can find their node without a re-render. */
-const nodes = new Map<string, HTMLElement>();
+const view = new TranscriptView(transcriptEl);
+const jumpBtn = $("jump");
+const progressEl = $("progress");
 let pendingConfirmId: string | null = null;
-
-const GLYPHS: Record<string, string> = {
-  click: "→",
-  type: "⌨",
-  select: "▾",
-  scroll: "↕",
-  key: "⏎",
-  find_text: "⌕",
-  wait: "◷",
-  read_page: "◉",
-  navigate: "⇢",
-  go_back: "⇠",
-  open_tab: "＋",
-  switch_tab: "⇄",
-  close_tab: "×",
-  list_tabs: "☰",
-};
 
 function send(command: PanelCommand): Promise<unknown> {
   return chrome.runtime.sendMessage(command).catch(() => undefined);
@@ -43,34 +32,43 @@ function atBottom(): boolean {
   );
 }
 
+/**
+ * Follows the transcript only while the reader is already at the bottom.
+ *
+ * Yanking the view down while someone is reading an earlier answer is worse
+ * than not following at all, so when they have scrolled up the new content is
+ * announced with a button instead.
+ */
+function settle(wasAtBottom: boolean): void {
+  if (wasAtBottom) {
+    transcriptEl.scrollTop = transcriptEl.scrollHeight;
+    jumpBtn.classList.add("hidden");
+  } else {
+    jumpBtn.classList.remove("hidden");
+  }
+}
+
 function render(entry: TranscriptEntry): void {
   emptyEl.classList.add("hidden");
   const stick = atBottom();
+  view.render(entry);
+  if (entry.role === "step") showProgress();
+  settle(stick);
+}
 
-  let node = nodes.get(entry.id);
-  if (!node) {
-    node = document.createElement("div");
-    node.className = `entry ${entry.role}`;
-    if (entry.role === "step") {
-      node.innerHTML = `<span class="glyph"></span><span class="detail"></span>`;
-    }
-    nodes.set(entry.id, node);
-    transcriptEl.appendChild(node);
-  }
-
-  if (entry.role === "step") {
-    node.querySelector(".glyph")!.textContent = GLYPHS[entry.action ?? ""] ?? "•";
-    node.querySelector(".detail")!.textContent = entry.text;
-    node.classList.toggle("pending", entry.pending === true);
-  } else {
-    node.textContent = entry.text;
-  }
-
-  if (stick) transcriptEl.scrollTop = transcriptEl.scrollHeight;
+/** Actions taken in the run now in progress. */
+function showProgress(): void {
+  if (!statusDot.classList.contains("running")) return;
+  const count = view.steps;
+  progressEl.textContent = count === 0 ? "" : `${count} action${count === 1 ? "" : "s"}`;
 }
 
 function setRunning(running: boolean): void {
   statusDot.classList.toggle("running", running);
+  // The count belongs to the run, not to the transcript, so it clears when the
+  // run ends rather than sitting there as a stale total.
+  if (!running) progressEl.textContent = "";
+  else showProgress();
   sendBtn.classList.toggle("hidden", running);
   stopBtn.classList.toggle("hidden", !running);
   inputEl.disabled = running;
@@ -83,23 +81,11 @@ chrome.runtime.onMessage.addListener((event: AgentEvent) => {
       break;
 
     case "patch": {
-      const node = nodes.get(event.id);
-      if (!node) break;
-      if (event.text !== undefined) {
-        if (node.classList.contains("assistant") && !event.replace) {
-          // Streamed prose arrives as deltas.
-          node.textContent = (node.textContent ?? "") + event.text;
-        } else if (node.classList.contains("assistant")) {
-          // A replacement: the answer with real values put back.
-          node.textContent = event.text;
-        } else if (node.classList.contains("step")) {
-          node.querySelector(".detail")!.textContent = event.text;
-        } else {
-          node.textContent = event.text;
-        }
+      const stick = atBottom();
+      if (!view.patch(event.id, { text: event.text, pending: event.pending, replace: event.replace })) {
+        break;
       }
-      if (event.pending !== undefined) node.classList.toggle("pending", event.pending);
-      if (atBottom()) transcriptEl.scrollTop = transcriptEl.scrollHeight;
+      settle(stick);
       break;
     }
 
@@ -112,6 +98,39 @@ chrome.runtime.onMessage.addListener((event: AgentEvent) => {
       confirmText.textContent = event.summary;
       confirmEl.classList.remove("hidden");
       break;
+
+    case "question":
+      showQuestion(event.id, event.question);
+      break;
+  }
+});
+
+function showQuestion(id: string, question: string): void {
+  pendingQuestionId = id;
+  questionText.textContent = question;
+  questionInput.value = "";
+  questionEl.classList.remove("hidden");
+  questionInput.focus();
+}
+
+function answerQuestion(answer: string | null): void {
+  if (!pendingQuestionId) return;
+  // Skipping sends an empty answer, which the agent reads as "no answer".
+  void send({ kind: "question-reply", id: pendingQuestionId, answer: answer ?? "" });
+  pendingQuestionId = null;
+  questionEl.classList.add("hidden");
+}
+
+$("question-send").addEventListener("click", () => {
+  const answer = questionInput.value.trim();
+  if (answer) answerQuestion(answer);
+});
+$("question-skip").addEventListener("click", () => answerQuestion(null));
+questionInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    const answer = questionInput.value.trim();
+    if (answer) answerQuestion(answer);
   }
 });
 
@@ -146,10 +165,21 @@ stopBtn.addEventListener("click", () => void send({ kind: "stop" }));
 
 $("new-task").addEventListener("click", () => {
   void send({ kind: "reset" });
-  nodes.clear();
-  transcriptEl.querySelectorAll(".entry").forEach((n) => n.remove());
+  view.clear();
+  progressEl.textContent = "";
   emptyEl.classList.remove("hidden");
+  jumpBtn.classList.add("hidden");
   setRunning(false);
+});
+
+jumpBtn.addEventListener("click", () => {
+  transcriptEl.scrollTop = transcriptEl.scrollHeight;
+  jumpBtn.classList.add("hidden");
+});
+
+// Reaching the bottom by hand dismisses the button too.
+transcriptEl.addEventListener("scroll", () => {
+  if (atBottom()) jumpBtn.classList.add("hidden");
 });
 
 $("settings").addEventListener("click", () => chrome.runtime.openOptionsPage());
@@ -187,10 +217,28 @@ document.querySelectorAll<HTMLElement>("[data-example]").forEach((el) => {
 // The panel can be reopened mid-run — rebuild from the worker's transcript.
 void (async () => {
   const state = (await chrome.runtime.sendMessage({ kind: "get-state" })) as
-    | { transcript: TranscriptEntry[]; running: boolean }
+    | {
+        transcript: TranscriptEntry[];
+        running: boolean;
+        pendingConfirm?: { id: string; summary: string };
+        pendingQuestion?: { id: string; question: string };
+      }
     | undefined;
   if (!state) return;
   state.transcript.forEach(render);
   setRunning(state.running);
+
+  // A question asked while this panel was closed is still waiting. Without
+  // this, reopening the panel shows a running task and no way to answer it,
+  // and the task waits until it times out.
+  if (state.pendingConfirm) {
+    pendingConfirmId = state.pendingConfirm.id;
+    confirmText.textContent = state.pendingConfirm.summary;
+    confirmEl.classList.remove("hidden");
+  }
+  if (state.pendingQuestion) {
+    showQuestion(state.pendingQuestion.id, state.pendingQuestion.question);
+  }
+
   transcriptEl.scrollTop = transcriptEl.scrollHeight;
 })();

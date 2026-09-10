@@ -1,6 +1,6 @@
 import type { Capture, DomCapture, ScreenshotMeta } from "../capture/types";
 import type { SpanRectRequest, SpanRectResult } from "../capture/spans";
-import { detect, setEntityOptions } from "../pii/detect";
+import { detect, scanText, setEntityOptions } from "../pii/detect";
 import type { DetectionResult, Finding } from "../pii/types";
 import { Vault } from "../vault/vault";
 import { CollectingMinter } from "../vault/protocol";
@@ -8,6 +8,8 @@ import type { MinterSource } from "../vault/remote";
 import { localSource } from "../vault/remote";
 import { tokenizeCapture, type TokenizeReport } from "./tokenize";
 import { redactScreenshot, type RedactReport } from "./redact";
+import { ocrScreenshot, type Cropper, type OcrMode, type OcrReport } from "./ocr-screenshot";
+import type { OcrEngine } from "../pii/ocr";
 
 /**
  * The sanitization layer, end to end.
@@ -26,6 +28,8 @@ export interface SanitizeReport {
   detection: DetectionResult["stats"];
   tokenize: TokenizeReport;
   redact: RedactReport;
+  /** What was read out of the screenshot's pixels, when OCR ran. */
+  ocr?: OcrReport;
   /** Tokens the vault issued during this pass. */
   tokensMinted: number;
   /**
@@ -54,11 +58,18 @@ export interface SanitizePolicy {
    * names.
    */
   aggressiveNames: boolean;
+  /**
+   * Read text out of the screenshot before it goes. "images" reads every
+   * picture and canvas; "full" reads the whole screenshot as well; "off"
+   * covers only what the tree found. Does nothing without an engine.
+   */
+  ocr: OcrMode;
 }
 
 export const DEFAULT_POLICY: SanitizePolicy = {
   burnUnverifiedRegions: true,
   aggressiveNames: false,
+  ocr: "images",
 };
 
 /**
@@ -92,6 +103,10 @@ export async function sanitize(
   vault: Vault | MinterSource,
   policy: SanitizePolicy = DEFAULT_POLICY,
   resolveRects?: RectResolver,
+  /** The OCR engine, when one can be reached. Absent means no pixels are read. */
+  ocr?: OcrEngine,
+  /** How the screenshot is cut up for OCR; injectable so tests need no canvas. */
+  crop?: Cropper,
 ): Promise<SanitizedCapture> {
   const started = performance.now();
 
@@ -104,11 +119,57 @@ export async function sanitize(
 
   // A region we could not read is only burned if policy says so; otherwise it
   // is downgraded to an informational finding rather than silently dropped.
-  const findings = detection.findings.map((finding) =>
+  let findings: Finding[] = detection.findings.map((finding) =>
     finding.kind === "unverified_region" && !policy.burnUnverifiedRegions
       ? { ...finding, action: "none" as const }
       : finding,
   );
+
+  // 1b. Read the pixels the tree could not, and measure the text spans -
+  //     the two are independent, and OCR is the slow one.
+  //
+  //     Where is each tokenized string actually painted? Without this the tree
+  //     says <EMAIL_1> while the picture still shows the address.
+  let ocrReport: OcrReport | undefined;
+  let spanRects: SpanRectResult[] = [];
+  if (capture.screenshot) {
+    const rectRequests: SpanRectRequest[] = findings
+      .filter((f) => f.shape === "text" && f.action !== "none" && f.action !== "burn-region")
+      .map((f) => ({
+        findingId: f.id,
+        nodeId: f.nodeId,
+        field: f.field ?? "text",
+        start: f.span?.[0],
+        end: f.span?.[1],
+      }));
+
+    const [ocrOutcome, rects] = await Promise.all([
+      ocrScreenshot({
+        dom: capture.dom,
+        shot: capture.screenshot,
+        viewport: capture.dom.viewport,
+        findings,
+        mode: policy.ocr,
+        engine: ocr,
+        crop,
+      }),
+      resolveRects ? resolveRects(rectRequests).catch(() => [] as SpanRectResult[]) : Promise.resolve([]),
+    ]);
+    spanRects = rects;
+    ocrReport = ocrOutcome.report;
+
+    // A canvas that was read no longer needs to be blacked out whole - only
+    // the PII in it, which the OCR findings now name. One that could not be
+    // read keeps its burn: nothing is released on a failed read.
+    if (ocrOutcome.release.size > 0) {
+      findings = findings.map((f) =>
+        f.shape === "pixel" && f.action === "burn-region" && ocrOutcome.release.has(f.nodeId)
+          ? { ...f, action: "none" as const, why: `${f.why} - read by OCR instead` }
+          : f,
+      );
+    }
+    findings = [...findings, ...ocrOutcome.findings];
+  }
 
   // 2. Work out every token this pass will need, without minting anything.
   //
@@ -118,12 +179,17 @@ export async function sanitize(
   //    it would ask for, then once against a replayer holding the answers. The
   //    traversal is deterministic, so the two sequences match - and ReplayMinter
   //    throws rather than guessing if they ever do not.
+  //
+  //    The redactor mints one token per burn region in findings order: a
+  //    tokenize for a region with a value, a seal for one without. This loop
+  //    must ask for exactly the same sequence.
   const collector = new CollectingMinter();
   tokenizeCapture(capture.dom, findings, collector);
   if (capture.screenshot) {
     for (const finding of findings) {
       if (finding.shape === "pixel" && finding.action === "burn-region") {
-        collector.seal(finding.kind);
+        if (finding.value) collector.tokenize(finding.value, finding.kind);
+        else collector.seal(finding.kind);
       }
     }
   }
@@ -144,6 +210,7 @@ export async function sanitize(
     regionsBurned: 0,
     textSpansCovered: 0,
     textSpansUnresolved: 0,
+    ocrSpansCovered: 0,
     regionsOutsideViewport: 0,
     regionsSkipped: 0,
     pixelsBurned: 0,
@@ -152,28 +219,6 @@ export async function sanitize(
   let screenshotError = capture.screenshotError;
 
   if (capture.screenshot) {
-    // Where is each tokenized string actually painted? Without this the tree
-    // says <EMAIL_1> while the picture still shows the address.
-    let spanRects: SpanRectResult[] = [];
-    if (resolveRects) {
-      const requests: SpanRectRequest[] = findings
-        .filter(
-          (f) =>
-            f.shape === "text" &&
-            f.action !== "none" &&
-            f.action !== "burn-region" &&
-            tokensByFinding.has(f.id),
-        )
-        .map((f) => ({
-          findingId: f.id,
-          nodeId: f.nodeId,
-          field: f.field ?? "text",
-          start: f.span?.[0],
-          end: f.span?.[1],
-        }));
-      spanRects = await resolveRects(requests).catch(() => []);
-    }
-
     const result = await redactScreenshot(
       capture.screenshot,
       findings,
@@ -188,6 +233,9 @@ export async function sanitize(
       : undefined;
     redact = result.report;
     screenshotError = result.error ?? screenshotError;
+    if (ocrReport?.error) {
+      screenshotError = screenshotError ? `${screenshotError}; ${ocrReport.error}` : ocrReport.error;
+    }
   }
 
   // 5. Verify. Run the detector over our own output and see what survived.
@@ -203,6 +251,7 @@ export async function sanitize(
       detection: detection.stats,
       tokenize,
       redact,
+      ocr: ocrReport,
       tokensMinted,
       residual,
       screenshotError,
@@ -225,9 +274,14 @@ export async function sanitize(
  */
 async function residualFindings(dom: DomCapture): Promise<Finding[]> {
   const again = await detect(dom);
-  return again.findings.filter(
-    (finding) => finding.shape === "text" && finding.tier !== 1,
-  );
+  const inTree = again.findings.filter((f) => f.shape === "text" && f.tier !== 1);
+
+  // The detector only walks nodes, so it cannot see the capture's own fields -
+  // and those are rendered into every payload. The document title leaked a
+  // signed-in address this way for a while, invisibly to this very check.
+  const loose = await scanText([dom.url, dom.title].join("\n"));
+
+  return [...inTree, ...loose];
 }
 
 /**

@@ -85,6 +85,12 @@ export interface Finding {
   why: string;
   /** What the sanitizer must do about it. */
   action: Neutralisation;
+  /**
+   * Where the finding came from. Absent means the DOM. "ocr" marks a region
+   * whose text was read out of the screenshot's pixels: it is pixel-shaped,
+   * but unlike a face it carries a value, and is tokenized rather than sealed.
+   */
+  origin?: "ocr";
 }
 
 export interface DetectionResult {

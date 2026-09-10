@@ -62,6 +62,32 @@
       <strong>Refresh list</strong> to pull what your key can actually reach.
     </p>
 
+    <label for="reasoningEffort">Thinking</label>
+    <select id="reasoningEffort">
+      <option value="off">Off — answer immediately</option>
+      <option value="standard">Standard — think before each action</option>
+      <option value="deep">Deep — think harder on every step</option>
+    </select>
+    <p class="hint">
+      How much the model reasons before it acts. Standard is the right default: it is what stops the
+      agent repeating an action without asking why the last one changed nothing. Deep is worth it on
+      unfamiliar sites and multi-step journeys. Costs reasoning tokens and adds a second or two per
+      step. Ignored by models that have no reasoning mode.
+    </p>
+
+    <label for="ocrMode">Read text in images (OCR)</label>
+    <select id="ocrMode">
+      <option value="images">Images and canvases — what the page tree cannot see</option>
+      <option value="full">Whole screenshot — slower, catches everything</option>
+      <option value="off">Off</option>
+    </select>
+    <p class="hint">
+      A phone number baked into a picture, a scanned invoice, a canvas-drawn document: none of it is
+      text to the page tree, all of it is text to the model. OCR reads those pixels first so the same
+      placeholder covers the picture and the page. Adds about a second per image. Only applies while
+      screenshots are sent.
+    </p>
+
     <label for="maxSteps">Step limit per task</label>
     <input id="maxSteps" type="number" min="5" max="200" />
     <p class="hint">How many planning turns before the agent gives up. Most real tasks land in 5–15.</p>

@@ -77,11 +77,30 @@ export const TOOLS: ToolSpec[] = [
   },
   {
     name: "key",
-    description: "Press a single key such as Enter, Escape, Tab, or ArrowDown.",
+    description:
+      "Press a key, with modifiers if needed: \"Enter\", \"Escape\", \"Tab\", \"ArrowDown\", " +
+      "\"ctrl+a\", \"shift+Tab\", \"meta+Enter\". Goes to the focused element.",
     parameters: {
       type: "object",
       properties: { key: { type: "string" } },
       required: ["key"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "ask_user",
+    description:
+      "Ask the user one question and wait for the answer. Use it when the task " +
+      "cannot be done without something only they know - which of two accounts, " +
+      "what to write, whether a near-match is the right one. Do not use it to " +
+      "confirm actions (the harness does that) or to report progress. Ask once, " +
+      "specifically, and offer the options you can see.",
+    parameters: {
+      type: "object",
+      properties: {
+        question: { type: "string", description: "One clear question, with options if there are any" },
+      },
+      required: ["question"],
       additionalProperties: false,
     },
   },

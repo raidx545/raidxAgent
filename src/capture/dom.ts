@@ -1,4 +1,5 @@
 import type { BBox, CapturedNode, DomCapture } from "./types";
+import { scrollState } from "./scroller";
 
 /**
  * Attributes worth keeping. These are the ones that say what a field is *for*
@@ -38,6 +39,16 @@ const KEPT_ATTRS = [
   "data-name",
   "data-user-name",
   "data-sender",
+  // State a page uses to say "this is on top of everything else". The render
+  // budget gives an open dialog priority over the page behind it, and read
+  // those attributes off the captured node - so not capturing them made that
+  // whole branch dead code, and Gmail's compose window kept losing its place
+  // to the two thousand inbox rows in front of it.
+  "aria-modal",
+  "aria-expanded",
+  "aria-haspopup",
+  "aria-hidden",
+  "open",
 ];
 
 const MEDIA_TAGS = new Set(["img", "canvas", "svg", "video", "picture", "object", "embed"]);
@@ -306,9 +317,31 @@ function boxOf(el: Element): BBox {
   ];
 }
 
-function isRendered(el: Element): boolean {
-  const style = getComputedStyle(el);
-  if (style.display === "none" || style.visibility === "hidden") return false;
+/**
+ * Can anything inside this element be on the screen?
+ *
+ * Only `display:none` answers no for a whole subtree. A zero-sized box does
+ * not: an element with no width or height of its own can hold children that
+ * are absolutely or fixed positioned, and those children are painted normally.
+ * Application shells lean on exactly that - a 0x0 anchor holding a popup, a
+ * menu, a compose window - so treating an empty box as an empty subtree threw
+ * away the part of the page the user had just opened.
+ *
+ * That was the Gmail compose bug: clicking Compose worked, the window opened,
+ * and the capture contained none of it, because a wrapper on the way down
+ * measured 0x0. The planner saw no compose window, concluded its click had not
+ * landed, and clicked again - opening a second one.
+ *
+ * `visibility:hidden` is deliberately not treated as fatal either: a descendant
+ * can set `visibility:visible` and become painted again.
+ */
+function hidesSubtree(style: CSSStyleDeclaration): boolean {
+  return style.display === "none";
+}
+
+/** Is this element itself painted - as opposed to merely containing things? */
+function isPainted(el: Element, style: CSSStyleDeclaration): boolean {
+  if (style.visibility === "hidden") return false;
   const rect = el.getBoundingClientRect();
   return rect.width > 0 || rect.height > 0;
 }
@@ -329,6 +362,8 @@ function isSignificant(el: Element, node: CapturedNode): boolean {
   if (node.text) return true;
   if (node.value) return true;
   if (el.hasAttribute("contenteditable")) return true;
+  // A box painting an image is an image, whatever its tag.
+  if (node.attrs.bgHost) return true;
   return false;
 }
 
@@ -336,7 +371,8 @@ function walk(el: Element): CapturedNode[] {
   if (SKIP_TAGS.has(el.tagName.toLowerCase())) return [];
   examined++;
 
-  if (!isRendered(el)) {
+  const style = getComputedStyle(el);
+  if (hidesSubtree(style)) {
     pruned++;
     return [];
   }
@@ -346,7 +382,37 @@ function walk(el: Element): CapturedNode[] {
     children.push(...walk(child));
   }
 
+  // The element has no box of its own. Anything it holds has already been
+  // collected above, so hoist that and drop the empty wrapper - but never the
+  // wrapper's contents.
+  if (!isPainted(el, style)) {
+    pruned++;
+    return children;
+  }
+
   const bbox = boxOf(el);
+  const attrs = attrsOf(el);
+
+  // A photograph does not have to be an <img>. X, LinkedIn, Slack and most chat
+  // and social UIs paint the profile picture as a CSS background on a <div>,
+  // which no image detector that walks tags will ever see. Record the host the
+  // same way srcHost is recorded, so the pixel tier can treat it as an image.
+  // Only worth doing for a box big enough to be a face, not an icon.
+  if (bbox[2] >= 24 && bbox[3] >= 24) {
+    const background = style.backgroundImage;
+    if (background && background !== "none") {
+      const url = /url\(["']?([^"')]+)["']?\)/.exec(background)?.[1];
+      if (url) {
+        try {
+          const parsed = new URL(url, location.href);
+          attrs.bgHost = parsed.protocol === "data:" ? "data:" : parsed.host;
+        } catch {
+          /* a malformed url is not worth reporting */
+        }
+      }
+    }
+  }
+
   const node: CapturedNode = {
     id: 0,
     tag: el.tagName.toLowerCase(),
@@ -354,7 +420,7 @@ function walk(el: Element): CapturedNode[] {
     label: labelOf(el),
     text: ownText(el) || undefined,
     value: valueOf(el),
-    attrs: attrsOf(el),
+    attrs,
     bbox,
     visible: bbox[1] < innerHeight && bbox[1] + bbox[3] > 0 && bbox[2] > 0 && bbox[3] > 0,
     children,
@@ -382,6 +448,20 @@ function assignIds(node: CapturedNode, next: { value: number }): number {
   return count;
 }
 
+/**
+ * The tree from the last capture.
+ *
+ * Anything that needs to search the page must use this rather than capturing
+ * again: a fresh capture reassigns every id, so ids reported from it would not
+ * be the ids the planner was issued, and acting on one would be refused.
+ */
+let lastTree: DomCapture | undefined;
+
+/** The most recent capture, for searching without reassigning ids. */
+export function lastCapture(): DomCapture | undefined {
+  return lastTree;
+}
+
 /** The live element behind a captured node, if it is still on the page. */
 export function capturedElement(id: number): Element | undefined {
   const el = registry[id];
@@ -399,6 +479,9 @@ export function captureDom(): DomCapture {
 
   const children = walk(document.body);
 
+  // Where the page actually scrolls, which is usually not the window.
+  const content = scrollState();
+
   const root: CapturedNode = {
     id: 0,
     tag: "body",
@@ -412,7 +495,7 @@ export function captureDom(): DomCapture {
 
   const kept = assignIds(root, { value: 0 });
 
-  return {
+  const capture: DomCapture = {
     url: location.href,
     origin: location.origin,
     title: document.title,
@@ -421,13 +504,26 @@ export function captureDom(): DomCapture {
       width: innerWidth,
       height: innerHeight,
       dpr: devicePixelRatio,
+      // Window scroll: this is the frame the screenshot and every redaction
+      // box are expressed in, so it stays the window's even when the window
+      // is not what moves.
       scrollX: Math.round(scrollX),
       scrollY: Math.round(scrollY),
-      pageHeight: document.body.scrollHeight,
+      pageHeight: Math.max(
+        document.scrollingElement?.scrollHeight ?? 0,
+        document.body.scrollHeight,
+        innerHeight,
+      ),
+      ...(content.inner
+        ? { contentScrollY: content.scrollY, contentHeight: content.pageHeight }
+        : {}),
     },
     root,
     stats: { examined, kept, pruned },
   };
+
+  lastTree = capture;
+  return capture;
 }
 
 /** Finds a node by id in a captured tree. */

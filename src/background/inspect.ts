@@ -33,6 +33,16 @@ function delay(ms: number): Promise<void> {
 
 export interface CaptureOptions {
   /**
+   * Take a screenshot at all. Defaults to true.
+   *
+   * When the planner is not going to be sent an image there is no reason to
+   * photograph the tab, re-walk the DOM to align the photograph, or burn
+   * anything out of it - and captureVisibleTab is rate-limited to two calls a
+   * second, so that unused screenshot was the single slowest thing in the
+   * step. Off means one DOM walk and nothing else.
+   */
+  screenshot?: boolean;
+  /**
    * Photograph the whole scrollable page rather than just the viewport.
    *
    * Costs roughly half a second per screen - Chrome caps captureVisibleTab at
@@ -77,6 +87,12 @@ export async function captureTab(
       if (!dom) throw new Error("The page did not respond to the capture request.");
 
       return { dom, screenshot: shot, screenshotError: error };
+    }
+
+    if (options.screenshot === false) {
+      const dom = await controller.captureDom();
+      if (!dom) throw new Error("The page did not respond to the capture request.");
+      return { dom };
     }
 
     let lastDom: DomCapture | undefined;

@@ -58,6 +58,11 @@ const REWRITABLE: Field[] = [
   "attr:data-hovercard-id",
   "attr:name",
   "attr:aria-label",
+  // Detected by tier 2 and the gazetteer; a finding in a field this list does
+  // not name would be reported and then never rewritten.
+  "attr:data-name",
+  "attr:data-user-name",
+  "attr:data-sender",
 ];
 
 interface Plan {
@@ -195,6 +200,19 @@ export function tokenizeCapture(
       ...capture,
       // The URL path can itself be an identifier; only the origin survives.
       url: capture.origin,
+      // The document title is not a node, so nothing above rewrites it - and it
+      // is rendered into every payload. A mail client puts the signed-in
+      // address there ("Inbox (2,179) - someone@gmail.com - Gmail"), which
+      // leaked the user's own identity on every single turn.
+      //
+      // The capture sets the root node's label from the same string, and that
+      // node *has* been sanitized, so it is the corrected title.
+      //
+      // No fallback to `capture.title`. An empty title costs the planner almost
+      // nothing; a raw one is the leak this line exists to close, and a `||`
+      // here would quietly restore it whenever the root label happened to be
+      // empty.
+      title: root.label,
       root,
     },
     report,

@@ -1,5 +1,39 @@
+# Dependencies and build output. `dist/` is produced by `npm run build` and is
+# what Chrome loads; it is never edited by hand, so it is never committed.
 node_modules/
 dist/
-*.log
-.DS_Store
+
+# Secrets. API keys belong in chrome.storage.local, set through the extension's
+# options page — nothing in this repo should ever hold one.
+.env
+.env.*
+*.pem
+*.key
+
+# Local tool state. `.claude/rules/` is deliberately kept: those are project
+# rules that travel with the repo. Everything else in there — launch.json and
+# friends — describes one machine, not the project.
+.claude/*
+!.claude/rules/
 .rocketride/
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*~
+
+# macOS and Windows litter
+.DS_Store
+._*
+Thumbs.db
+
+# Logs, caches, coverage, scratch
+*.log
+npm-debug.log*
+yarn-error.log*
+.cache/
+.tmp/
+tmp/
+coverage/
+*.tsbuildinfo

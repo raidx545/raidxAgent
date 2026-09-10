@@ -3,6 +3,7 @@ import { act } from "./act";
 import { captureDom } from "../capture/dom";
 import { begin, scrollTo, end } from "../capture/fullpage";
 import { spanRects } from "../capture/spans";
+import { settle } from "./settle";
 
 /**
  * The page-side half of the agent. It owns the only code that reads or touches
@@ -21,6 +22,15 @@ chrome.runtime.onMessage.addListener(
         // the same ids, so there is no way for the two to disagree.
         sendResponse({ ok: true, detail: "capture", capture: captureDom() });
         return false;
+
+      case "settle":
+        // A freshly navigated page is measured once it stops changing, not on a
+        // fixed timer. Client-rendered apps paint their real content well after
+        // the load event; a static page is ready immediately.
+        settle({ start: 400, ceiling: 2500 }).then(() =>
+          sendResponse({ ok: true, detail: "settled" } satisfies ActionResult),
+        );
+        return true;
 
       case "fullpage-begin":
         sendResponse({ ok: true, detail: "ready", page: begin() });

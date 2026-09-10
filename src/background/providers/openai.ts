@@ -56,6 +56,17 @@ export function toMessages(system: string, messages: ConvMessage[]): ChatMessage
   return out;
 }
 
+/**
+ * Does this model take `reasoning_effort`?
+ *
+ * The o-series and GPT-5 do; the chat models reject the parameter outright.
+ * OpenRouter ids carry a vendor prefix, so match on the tail.
+ */
+function reasoningModel(model: string): boolean {
+  const name = model.includes("/") ? model.slice(model.lastIndexOf("/") + 1) : model;
+  return /^(o\d|gpt-5)/.test(name);
+}
+
 function toTools(tools: ToolSpec[]): OpenAI.Chat.Completions.ChatCompletionTool[] {
   return tools.map((tool) => ({
     type: "function",
@@ -104,7 +115,7 @@ export function createOpenAIPlanner(
   return {
     label: `${label} ${model}`,
 
-    async run({ system, messages, tools, signal, onText, image }: PlannerRequest): Promise<PlannerTurn> {
+    async run({ system, messages, tools, signal, onText, image, effort = "standard" }: PlannerRequest): Promise<PlannerTurn> {
       let stream: Awaited<ReturnType<typeof client.chat.completions.create>>;
 
       const built = toMessages(system, messages);
@@ -136,6 +147,12 @@ export function createOpenAIPlanner(
             ...(provider === "openai"
               ? { max_completion_tokens: 8000 }
               : { max_tokens: 8000 }),
+            // Reasoning effort only exists on the reasoning models. Sending it
+            // to a chat model is a 400, so it is gated on the model id rather
+            // than on the setting alone.
+            ...(effort !== "off" && reasoningModel(model)
+              ? { reasoning_effort: effort === "deep" ? "high" : "medium" }
+              : {}),
           },
           { signal },
         );

@@ -48,7 +48,8 @@ const IMAGE_TAGS = new Set([
 ]);
 
 /** Hosts that serve profile pictures and essentially nothing else. */
-const AVATAR_HOSTS = /(gravatar|ui-avatars|avatars\.githubusercontent|lh3\.googleusercontent|pbs\.twimg)/i;
+const AVATAR_HOSTS =
+  /(gravatar|ui-avatars|avatars\.githubusercontent|lh[3-6]\.googleusercontent|ggpht|pbs\.twimg|abs\.twimg|fbcdn|media\.licdn|licdn\.com\/dms\/image|graph\.facebook|dicebear|robohash|secure\.gravatar|avatars\.slack-edge|ca\.slack-edge|cdn\.discordapp\.com\/avatars)/i;
 
 const CUES: { pattern: RegExp; kind: PiiKind; confidence: ImageVerdict["confidence"]; why: string }[] = [
   {
@@ -112,6 +113,9 @@ function heuristic(node: CapturedNode): ImageVerdict | undefined {
     };
   }
 
+  // An <img>'s src and a <div>'s background-image are the same thing here.
+  const imageHost = node.attrs.srcHost ?? node.attrs.bgHost;
+
   const haystack = [
     node.label,
     node.attrs.alt,
@@ -119,7 +123,7 @@ function heuristic(node: CapturedNode): ImageVerdict | undefined {
     node.attrs.id,
     node.attrs["data-testid"],
     node.attrs["aria-label"],
-    node.attrs.srcHost,
+    imageHost,
   ]
     .filter(Boolean)
     .join(" ");
@@ -127,11 +131,11 @@ function heuristic(node: CapturedNode): ImageVerdict | undefined {
   const cue = CUES.find((c) => c.pattern.test(haystack));
   if (cue) return { kind: cue.kind, confidence: cue.confidence, why: cue.why };
 
-  if (node.attrs.srcHost && AVATAR_HOSTS.test(node.attrs.srcHost)) {
+  if (imageHost && AVATAR_HOSTS.test(imageHost)) {
     return {
       kind: "face_or_photo",
       confidence: "high",
-      why: `served from ${node.attrs.srcHost}, an avatar host`,
+      why: `served from ${imageHost}, an avatar host`,
     };
   }
 
@@ -145,9 +149,11 @@ function heuristic(node: CapturedNode): ImageVerdict | undefined {
     };
   }
 
-  // A small near-square image is the classic avatar shape.
+  // A small near-square image is the classic avatar shape - whether it is an
+  // <img> or a <div> with the picture painted behind it.
   const ratio = width / height;
-  if (node.tag === "img" && ratio > 0.8 && ratio < 1.25 && width < 160) {
+  const paintsImage = node.tag === "img" || !!node.attrs.bgHost;
+  if (paintsImage && ratio > 0.8 && ratio < 1.25 && width < 160) {
     return {
       kind: "face_or_photo",
       confidence: "low",
@@ -169,7 +175,7 @@ export const tier3Pixels: Detector = {
     const findings: Finding[] = [];
 
     for (const node of walkCapture(capture.root)) {
-      if (!IMAGE_TAGS.has(node.tag)) continue;
+      if (!IMAGE_TAGS.has(node.tag) && !node.attrs.bgHost) continue;
 
       const verdict = classifier
         ? await classifier.classify(node)

@@ -173,3 +173,150 @@ export function isVoterId(raw: string): boolean {
 export function isVehicleNumber(raw: string): boolean {
   return /^[A-Z]{2}\d{1,2}[A-Z]{0,3}\d{4}$/.test(raw.toUpperCase().replace(/[\s-]/g, ""));
 }
+
+
+// --- Script-independent digits --------------------------------------------
+
+/**
+ * Maps the digits of Indian scripts (and Arabic-Indic) onto ASCII.
+ *
+ * Government portals render numbers in the page's language: an Aadhaar shown as
+ * "३४५६ ७८९० १२३८" is the same twelve digits, and `\d` in a JavaScript regex
+ * does not see any of them. Every one of these digits is a single UTF-16 code
+ * unit, exactly like its ASCII counterpart, so the normalised string has the
+ * same length and every offset into it is also an offset into the original.
+ * That is what lets detection run on the copy and report spans on the source.
+ */
+const DIGIT_BLOCKS = [
+  0x0966, // Devanagari
+  0x09e6, // Bengali
+  0x0a66, // Gurmukhi
+  0x0ae6, // Gujarati
+  0x0b66, // Oriya
+  0x0be6, // Tamil
+  0x0c66, // Telugu
+  0x0ce6, // Kannada
+  0x0d66, // Malayalam
+  0x0660, // Arabic-Indic
+  0x06f0, // Extended Arabic-Indic
+];
+
+export function normaliseDigits(text: string): string {
+  let out = "";
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i);
+    let mapped: string | undefined;
+    for (const base of DIGIT_BLOCKS) {
+      if (code >= base && code <= base + 9) {
+        mapped = String(code - base);
+        break;
+      }
+    }
+    out += mapped ?? text[i];
+  }
+  return out;
+}
+
+// --- Aadhaar Virtual ID ---------------------------------------------------
+
+/** A VID is 16 digits, first digit 2-9, with the same Verhoeff check as Aadhaar. */
+export function isAadhaarVid(raw: string): boolean {
+  const digits = raw.replace(/[\s-]/g, "");
+  if (!/^[2-9]\d{15}$/.test(digits)) return false;
+  if (/^(\d)\1{15}$/.test(digits)) return false;
+  return verhoeff(digits);
+}
+
+// --- Indian landline ------------------------------------------------------
+
+/**
+ * Trunk zero, an STD code of two to four digits, then a six- to eight-digit
+ * subscriber number: ten or eleven digits in all. Weak on its own - the caller
+ * demands a nearby "tel"/"phone"/"office" cue before reporting one.
+ */
+export function isIndianLandline(raw: string): boolean {
+  const digits = raw.replace(/[\s()-]/g, "");
+  if (!/^0[1-9]\d{8,9}$/.test(digits)) return false;
+  if (/^0(\d)\1+$/.test(digits)) return false;
+  return true;
+}
+
+// --- International --------------------------------------------------------
+
+/**
+ * E.164-shaped: a plus, a one- to three-digit country code, then eight to
+ * fifteen digits in all. The plus is what makes this safe to report - an
+ * unprefixed run of eleven digits is an order number far more often than a
+ * phone number, but nobody writes "+" in front of an order number.
+ */
+export function isInternationalPhone(raw: string): boolean {
+  if (!raw.trim().startsWith("+")) return false;
+  const digits = raw.replace(/\D/g, "");
+  if (digits.length < 8 || digits.length > 15) return false;
+  if (/^(\d)\1+$/.test(digits)) return false;
+  return true;
+}
+
+// --- IFSC bank codes ------------------------------------------------------
+
+/**
+ * The four-letter codes of banks that actually exist. An IFSC has no check
+ * digit, so this is the only thing separating one from any eleven-character
+ * word with a zero in the fifth place. A known bank makes the match certain; an
+ * unknown one is reported only beside a banking cue.
+ */
+export const IFSC_BANKS = new Set([
+  "SBIN", "HDFC", "ICIC", "UTIB", "PUNB", "BARB", "KKBK", "IDIB", "CNRB", "UBIN", "IOBA",
+  "BKID", "YESB", "INDB", "FDRL", "KARB", "SIBL", "CBIN", "MAHB", "PSIB", "UCBA", "CIUB",
+  "TMBL", "KVBL", "DLXB", "CSBK", "RATN", "IBKL", "AUBL", "BDBL", "ESFB", "UJVN", "SURY",
+  "JSFB", "FINO", "PYTM", "AIRP", "NSPB", "DBSS", "CITI", "HSBC", "SCBL", "DEUT", "BOFA",
+  "JPMC", "BNPA", "ORBC", "ANDB", "CORP", "SYNB", "VIJB", "ALLA", "UTBI", "DENA", "JAKA",
+  "KACE", "NKGS", "SVCB", "COSB", "ABHY", "TJSB", "APGB", "KGRB", "PKGB", "MSCI", "GSCB",
+  "HPSC", "RSCB", "TSAB", "IPOS", "NTBL", "SRCB", "SDCB", "ZCBL", "APMC", "HARC", "IDFB",
+  "BACB", "KUCB", "PJSB", "SPCB", "TBSB", "VARA", "ADCC", "HCBL", "VSBL", "MCBL", "NICB",
+]);
+
+export function isKnownIfsc(raw: string): boolean {
+  const value = raw.toUpperCase().replace(/\s/g, "");
+  return isIfsc(value) && IFSC_BANKS.has(value.slice(0, 4));
+}
+
+// --- Obfuscated email -----------------------------------------------------
+
+/** The endings an address written out in words is allowed to have. */
+const TLDS = new Set(
+  "com in org net co edu gov io ai uk us de fr info biz me app dev xyz ac nic gov.in co.in ac.in".split(" "),
+);
+
+/** Ordinary words that sit before "dot" in prose without being a domain. */
+const NOT_A_DOMAIN = new Set(
+  "the a an my our your his her their this that it them us me you all any some home work noon night day one".split(" "),
+);
+
+/**
+ * "priya [at] example [dot] in" is an address; "look at the dot com bubble" is
+ * a sentence. Both fit the shape, so the shape is not enough. Bracketed forms
+ * are always deliberate. The bare-word form - which is the only one prose can
+ * produce by accident - must end in a real top-level domain and must not have
+ * an ordinary English word where the domain should be.
+ */
+export function isObfuscatedEmail(raw: string): boolean {
+  const text = raw.trim();
+  const bracketed = /[\[({<]\s*(?:at|dot)\s*[\])}>]/i.test(text);
+
+  const parts = text
+    .split(/\s*(?:\[\s*(?:at|dot)\s*\]|\(\s*(?:at|dot)\s*\)|\{\s*(?:at|dot)\s*\}|<\s*(?:at|dot)\s*>|\s+(?:at|dot|AT|DOT)\s+)\s*/i)
+    .filter(Boolean);
+  if (parts.length < 3) return false;
+
+  const tld = parts[parts.length - 1].toLowerCase();
+  const domain = parts[1].toLowerCase();
+
+  if (bracketed) return /^[a-z]{2,6}$/.test(tld);
+
+  // The uppercase AT/DOT convention is as deliberate as brackets.
+  const shouted = /\s(?:AT|DOT)\s/.test(text);
+  if (shouted) return /^[a-z]{2,6}$/.test(tld);
+
+  return TLDS.has(tld) && !NOT_A_DOMAIN.has(domain);
+}

@@ -11,6 +11,7 @@
       <div class="brand">
         <span class="dot" id="status-dot"></span>
         <strong>RAIDX</strong>
+        <span class="progress" id="progress" aria-live="polite"></span>
       </div>
       <div class="bar-actions">
         <button id="new-task" class="ghost" title="Clear the transcript">New</button>
@@ -20,7 +21,7 @@
       </div>
     </header>
 
-    <main id="transcript" class="transcript">
+    <main id="transcript" class="transcript" aria-live="polite" aria-relevant="additions text">
       <div class="empty" id="empty">
         <h2>What should I do?</h2>
         <p>I work in the tab you have open. Tell me a goal, not a click.</p>
@@ -32,11 +33,22 @@
       </div>
     </main>
 
+    <button id="jump" class="jump hidden" type="button">Jump to latest ↓</button>
+
     <div id="confirm" class="confirm hidden">
       <p id="confirm-text"></p>
       <div class="confirm-actions">
         <button id="confirm-no" class="ghost">Cancel</button>
         <button id="confirm-yes" class="primary">Allow</button>
+      </div>
+    </div>
+
+    <div id="question" class="confirm hidden">
+      <p id="question-text"></p>
+      <textarea id="question-input" rows="2" placeholder="Your answer…  (Enter to send)"></textarea>
+      <div class="confirm-actions">
+        <button id="question-skip" class="ghost">Skip</button>
+        <button id="question-send" class="primary">Answer</button>
       </div>
     </div>
 
