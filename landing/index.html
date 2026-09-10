@@ -3,9 +3,9 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="description" content="RAIDX is a privacy-preserving browser agent. PII is detected, tokenized, and redacted locally before an AI model sees a page." />
+    <meta name="description" content="VLESS is a privacy-preserving browser agent. PII is detected, tokenized, and redacted locally before an AI model sees a page." />
     <meta name="theme-color" content="#1537ad" />
-    <title>RAIDX — Private Browser Agent</title>
+    <title>VLESS — Private Browser Agent</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&family=Instrument+Serif:ital@0;1&family=Syne:wght@500;600;700;800&display=swap" rel="stylesheet" />
@@ -183,9 +183,9 @@
   </head>
   <body>
     <nav class="nav" aria-label="Primary navigation">
-      <a class="brand" href="#top" aria-label="RAIDX home">
+      <a class="brand" href="#top" aria-label="VLESS home">
         <svg class="mark" viewBox="0 0 52 30" aria-hidden="true"><circle class="a" cx="3" cy="24" r="3.2"/><path d="M3 24C9 24 9 5 16 5s6 19 12 19S35 5 42 5s6 19 7 19"/><circle class="b" cx="49" cy="24" r="3.2"/></svg>
-        <span>RAIDX</span>
+        <span>VLESS</span>
       </a>
       <div class="nav-links">
         <a href="#pipeline">Pipeline</a><a href="#proof">Proof</a><a href="#install">Install</a>
@@ -195,12 +195,12 @@
 
     <main class="page" id="top">
       <header class="hero">
-        <div class="rail left">00 / on-device perception</div><div class="rail right">RAIDX / browser agent / 2026</div>
+        <div class="rail left">00 / on-device perception</div><div class="rail right">VLESS / browser agent / 2026</div>
         <div class="hero-copy">
           <div class="hero-mark"><svg class="mark" viewBox="0 0 52 30" aria-hidden="true"><circle class="a" cx="3" cy="24" r="3.2"/><path d="M3 24C9 24 9 5 16 5s6 19 12 19S35 5 42 5s6 19 7 19"/><circle class="b" cx="49" cy="24" r="3.2"/></svg></div>
-          <div class="hero-product">RAIDX — PRIVATE BROWSER AGENT</div>
+          <div class="hero-product">VLESS — PRIVATE BROWSER AGENT</div>
           <h1>Automation that sees the page.<br /><em>Not your private data.</em></h1>
-          <p>RAIDX detects personal data locally, replaces it with stable tokens, and burns it from screenshots before an AI model receives browser context.</p>
+          <p>VLESS detects personal data locally, replaces it with stable tokens, and burns it from screenshots before an AI model receives browser context.</p>
           <div class="hero-actions"><a class="primary-action" href="#install">Build from source ↓</a><a class="ghost-action" href="#pipeline">See the pipeline</a></div>
           <div class="terminal"><code>git clone https://github.com/raidx545/raidxAgent.git<br />npm install && npm run build</code><button class="copy" type="button" data-copy="git clone https://github.com/raidx545/raidxAgent.git\nnpm install && npm run build">Copy</button></div>
         </div>
@@ -215,7 +215,7 @@
       </header>
 
       <section class="architecture" id="pipeline">
-        <div class="architecture-intro reveal"><p class="eyebrow">01 / the privacy boundary</p><h2>The browser knows<br />the real world. <em>The model does not.</em></h2><p>Raw DOM, screenshots, OCR and the token vault stay inside the extension. RAIDX sends only a meaningful, redacted representation to the planner.</p></div>
+        <div class="architecture-intro reveal"><p class="eyebrow">01 / the privacy boundary</p><h2>The browser knows<br />the real world. <em>The model does not.</em></h2><p>Raw DOM, screenshots, OCR and the token vault stay inside the extension. VLESS sends only a meaningful, redacted representation to the planner.</p></div>
         <div class="flow reveal">
           <div class="flow-label"><h3>Find what should never leave.</h3><p>Semantic DOM signals, checksum-backed identifiers, page identity annotations, OCR, and screenshot geometry work together before any egress.</p><ul class="facts"><li>email, phone, PAN, Aadhaar, GSTIN</li><li>names, organisations, addresses</li><li>face, document, signature regions</li></ul></div>
           <div class="map" role="img" aria-label="Raw page data branches into local PII detection methods">
@@ -238,12 +238,12 @@
           <article class="principle reveal"><span class="num">03</span><h3>Text + pixels agree</h3><p>A token used in the redacted tree is painted into the matching screenshot region.</p></article>
           <article class="principle reveal"><span class="num">04</span><h3>Vault, not storage</h3><p>Stable mappings exist only in the session-scoped in-memory vault, never in planner context.</p></article>
           <article class="principle reveal"><span class="num">05</span><h3>Safety gate</h3><p>Credential fields are sealed. Purchases, sends and deletes pause for human confirmation.</p></article>
-          <article class="principle reveal"><span class="num">06</span><h3>Re-check the output</h3><p>RAIDX detects PII again after sanitizing. A residual is a failure, not a warning to ignore.</p></article>
+          <article class="principle reveal"><span class="num">06</span><h3>Re-check the output</h3><p>VLESS detects PII again after sanitizing. A residual is a failure, not a warning to ignore.</p></article>
         </div>
       </section>
 
       <section class="proof">
-        <div class="proof-shell"><div class="proof-intro reveal"><p class="eyebrow">03 / inspect the evidence</p><h2>Make the privacy claim <em>testable.</em></h2><p>Open the built-in PII inspector to compare the original DOM and screenshot with the tokenized and redacted outputs. The extension also ships browser self-tests for pixel destruction.</p></div><div class="audit-card reveal"><div class="audit-top"><span>RAIDX / verification log</span><span>local only</span></div><div class="audit-checks"><div class="audit-check"><b>✓</b> DOM PII mapped to stable tokens</div><div class="audit-check"><b>✓</b> Screenshot text painted over</div><div class="audit-check"><b>✓</b> Image regions burned on canvas</div><div class="audit-check"><b>✓</b> Residual detector re-run</div></div><div class="audit-bottom"><strong>Invariant:</strong> raw values and raw pixels do not become model input.</div></div></div>
+        <div class="proof-shell"><div class="proof-intro reveal"><p class="eyebrow">03 / inspect the evidence</p><h2>Make the privacy claim <em>testable.</em></h2><p>Open the built-in PII inspector to compare the original DOM and screenshot with the tokenized and redacted outputs. The extension also ships browser self-tests for pixel destruction.</p></div><div class="audit-card reveal"><div class="audit-top"><span>VLESS / verification log</span><span>local only</span></div><div class="audit-checks"><div class="audit-check"><b>✓</b> DOM PII mapped to stable tokens</div><div class="audit-check"><b>✓</b> Screenshot text painted over</div><div class="audit-check"><b>✓</b> Image regions burned on canvas</div><div class="audit-check"><b>✓</b> Residual detector re-run</div></div><div class="audit-bottom"><strong>Invariant:</strong> raw values and raw pixels do not become model input.</div></div></div>
       </section>
 
       <section class="install" id="install">
@@ -251,7 +251,7 @@
         <div class="install-panel reveal"><div class="tabs" role="tablist"><button class="tab" type="button" aria-selected="true" data-command="build">Build source</button><button class="tab" type="button" aria-selected="false" data-command="chrome">Chrome setup</button><button class="tab" type="button" aria-selected="false" data-command="verify">Verify privacy</button></div><div class="commands"><pre id="command">git clone https://github.com/raidx545/raidxAgent.git
 cd raidxAgent
 npm install && npm run build</pre><button class="command-copy" type="button" data-command-copy>Copy</button></div></div>
-        <footer class="footer"><a class="brand" href="#top"><svg class="mark" viewBox="0 0 52 30" aria-hidden="true"><circle class="a" cx="3" cy="24" r="3.2"/><path d="M3 24C9 24 9 5 16 5s6 19 12 19S35 5 42 5s6 19 7 19"/><circle class="b" cx="49" cy="24" r="3.2"/></svg><span>RAIDX</span></a><div class="footer-links"><a href="https://github.com/raidx545/raidxAgent" target="_blank" rel="noopener">GitHub ↗</a><a href="#pipeline">privacy pipeline ↑</a></div></footer>
+        <footer class="footer"><a class="brand" href="#top"><svg class="mark" viewBox="0 0 52 30" aria-hidden="true"><circle class="a" cx="3" cy="24" r="3.2"/><path d="M3 24C9 24 9 5 16 5s6 19 12 19S35 5 42 5s6 19 7 19"/><circle class="b" cx="49" cy="24" r="3.2"/></svg><span>VLESS</span></a><div class="footer-links"><a href="https://github.com/raidx545/raidxAgent" target="_blank" rel="noopener">GitHub ↗</a><a href="#pipeline">privacy pipeline ↑</a></div></footer>
       </section>
     </main>
     <script>
