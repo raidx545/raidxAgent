@@ -178,7 +178,7 @@ export function createOpenAIPlanner(
           { signal },
         );
       } catch (error) {
-        throw describe(error, label);
+        throw describe(error, label, provider === "custom");
       }
 
       let text = "";
@@ -211,7 +211,7 @@ export function createOpenAIPlanner(
           }
         }
       } catch (error) {
-        throw describe(error, label);
+        throw describe(error, label, provider === "custom");
       }
 
       const toolCalls = Array.from(partials.entries())
@@ -238,7 +238,21 @@ export function createOpenAIPlanner(
   };
 }
 
-function describe(error: unknown, label: string): Error {
+/**
+ * Whatever the server actually said, dug out of the SDK's error.
+ *
+ * `error.message` is often the SDK's own summary ("Internal server error") while
+ * the useful sentence sits in the parsed body under `error.error.message`. A
+ * server that refuses a payload usually says why there, and that line is the
+ * difference between a fixable problem and a dead end.
+ */
+function serverSaid(error: InstanceType<typeof OpenAI.APIError>): string {
+  const body = error.error as { message?: string; detail?: string } | undefined;
+  const said = body?.message ?? body?.detail ?? "";
+  return said && said !== error.message ? said : error.message;
+}
+
+function describe(error: unknown, label: string, custom: boolean): Error {
   if (error instanceof OpenAI.AuthenticationError) {
     return new PlannerError(`${label} rejected your API key. Check it in the extension options.`);
   }
@@ -251,8 +265,24 @@ function describe(error: unknown, label: string): Error {
         `Pick another model in the extension options.`,
     );
   }
+
   if (error instanceof OpenAI.APIError) {
-    return new PlannerError(`${label} API error ${error.status}: ${error.message}`);
+    // The status is absent when the failure arrives mid-stream rather than on
+    // the initial response, which is exactly when "API error undefined" used to
+    // be printed - a message that named the one thing nobody needed to know.
+    const status = typeof error.status === "number" ? ` ${error.status}` : "";
+
+    // A server we know nothing about rejects a payload for one of two reasons
+    // far more often than any other, and neither is obvious from a 500.
+    const hint = custom
+      ? " This usually means the model will not accept part of what was sent. " +
+        "Two things to try, in this order: turn off \u201cSend the redacted screenshot\u201d " +
+        "in options, since a text-only model rejects an image; and if that does not " +
+        "help, check the model supports tool calling \u2014 the agent cannot work without it."
+      : "";
+
+    return new PlannerError(`${label} API error${status}: ${serverSaid(error)}.${hint}`);
   }
+
   return error instanceof Error ? error : new Error(String(error));
 }
