@@ -51,6 +51,16 @@ export const PROVIDERS: Record<ProviderId, ProviderInfo> = {
     ],
     defaultModel: "anthropic/claude-opus-5",
   },
+  custom: {
+    id: "custom",
+    label: "Custom",
+    keyUrl: "https://platform.openai.com/docs/api-reference/chat",
+    keyHint: "optional for a local server",
+    // Nothing can be suggested without knowing the server, so this stays empty
+    // and Refresh asks the server itself.
+    suggested: [],
+    defaultModel: "",
+  },
 };
 
 export const PROVIDER_IDS = Object.keys(PROVIDERS) as ProviderId[];
@@ -64,7 +74,21 @@ export const PROVIDER_IDS = Object.keys(PROVIDERS) as ProviderId[];
 export async function listModels(
   provider: ProviderId,
   apiKey: string,
+  /** Required for "custom"; ignored otherwise. */
+  baseUrl = "",
 ): Promise<string[]> {
+  if (provider === "custom") {
+    const root = baseUrl.trim().replace(/\/+$/, "");
+    if (!root) throw new Error("Enter a base URL first.");
+    const response = await fetch(`${root}/models`, {
+      // A local server takes no key and ignores the header; a gateway needs it.
+      headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : undefined,
+    });
+    if (!response.ok) throw new Error(`${new URL(root).host} returned ${response.status}`);
+    const body = (await response.json()) as { data?: { id?: string }[] };
+    return (body.data ?? []).map((m) => m.id).filter((id): id is string => Boolean(id)).sort();
+  }
+
   if (provider === "openrouter") {
     // OpenRouter's catalogue is public — no key needed.
     const response = await fetch("https://openrouter.ai/api/v1/models");

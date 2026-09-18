@@ -6,7 +6,12 @@
  * normalises into the types below and the loop only ever sees these.
  */
 
-export type ProviderId = "anthropic" | "openai" | "openrouter";
+/**
+ * "custom" is any OpenAI-compatible server the user points us at: a gateway,
+ * a self-hosted model, Ollama or LM Studio on localhost. Its base URL comes
+ * from settings rather than a table, which is the whole point of it.
+ */
+export type ProviderId = "anthropic" | "openai" | "openrouter" | "custom";
 
 /** A tool definition, in the intersection both APIs accept. */
 export interface ToolSpec {

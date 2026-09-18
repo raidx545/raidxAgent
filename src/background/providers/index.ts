@@ -10,7 +10,15 @@ export function createPlanner(settings: Settings): Planner {
   const apiKey = settings.apiKeys[provider] ?? "";
   const model = settings.models[provider] ?? "";
 
-  if (!apiKey) {
+  // A custom server may legitimately need no key - a local Ollama does not -
+  // but it cannot work without somewhere to send the request.
+  if (provider === "custom" && !settings.customBaseUrl.trim()) {
+    throw new PlannerError(
+      "No base URL set for the custom provider. Open the extension options and add one, " +
+        "for example http://localhost:11434/v1.",
+    );
+  }
+  if (!apiKey && provider !== "custom") {
     throw new PlannerError(
       `No API key set for ${provider}. Open the extension options and add one.`,
     );
@@ -21,7 +29,7 @@ export function createPlanner(settings: Settings): Planner {
 
   return provider === "anthropic"
     ? createAnthropicPlanner(apiKey, model)
-    : createOpenAIPlanner(provider, apiKey, model);
+    : createOpenAIPlanner(provider, apiKey, model, settings.customBaseUrl.trim());
 }
 
 export type { Planner };

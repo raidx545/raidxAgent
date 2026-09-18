@@ -47,9 +47,21 @@
     <div class="tabs" id="provider-tabs" role="tablist"></div>
     <p class="hint" id="provider-hint"></p>
 
+    <div id="base-url-row" hidden>
+      <label for="baseUrl">Base URL</label>
+      <input id="baseUrl" type="text" spellcheck="false" autocomplete="off"
+             placeholder="https://api.example.com/v1" />
+      <p class="hint">
+        Any server that speaks OpenAI's chat-completions API — a gateway, a self-hosted model, or
+        Ollama and LM Studio on localhost. Include the version path the server expects, usually
+        <code>/v1</code>. Examples: <code>http://localhost:11434/v1</code> (Ollama),
+        <code>http://localhost:1234/v1</code> (LM Studio), <code>https://api.groq.com/openai/v1</code>.
+      </p>
+    </div>
+
     <label for="apiKey">API key</label>
     <input id="apiKey" type="password" autocomplete="off" spellcheck="false" />
-    <p class="hint">Each provider's key is remembered separately, so switching back does not lose it.</p>
+    <p class="hint" id="key-hint">Each provider's key is remembered separately, so switching back does not lose it.</p>
 
     <label for="model">Model</label>
     <div class="with-button">

@@ -25,6 +25,13 @@ provider you selected.
 | Anthropic | console.anthropic.com | Default. Native tool-use. |
 | OpenAI | platform.openai.com | Chat Completions with function calling. |
 | OpenRouter | openrouter.ai | One key, 400+ models across vendors. |
+| Custom | anywhere | Any OpenAI-compatible server: a gateway, a self-hosted model, or Ollama / LM Studio on localhost. You supply the base URL. |
+
+The **Custom** provider is the escape hatch. Give it a base URL ending in the version
+path the server expects — `http://localhost:11434/v1` for Ollama,
+`http://localhost:1234/v1` for LM Studio, `https://api.groq.com/openai/v1` for Groq —
+and a model id. The API key is optional, because a local server does not ask for one.
+**Refresh list** queries that server's own `/models`, so you never have to guess an id.
 
 Each provider's key and chosen model are remembered separately, so switching
 back and forth costs nothing. The model field is free text — type any id the

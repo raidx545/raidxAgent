@@ -188,6 +188,15 @@ export interface Settings {
   apiKeys: Record<ProviderId, string>;
   /** Chosen model per provider, likewise remembered independently. */
   models: Record<ProviderId, string>;
+  /**
+   * Where the "custom" provider sends its requests.
+   *
+   * Any server speaking OpenAI's chat-completions API: a gateway, a
+   * self-hosted model, or Ollama / LM Studio on localhost. Include the version
+   * path the server expects - usually ".../v1" - because that is part of the
+   * base URL, not something we can guess.
+   */
+  customBaseUrl: string;
   /** Hard ceiling on planner turns, so a confused agent cannot spin forever. */
   maxSteps: number;
   /**
@@ -232,12 +241,14 @@ export interface Settings {
 
 export const DEFAULT_SETTINGS: Settings = {
   provider: "anthropic",
-  apiKeys: { anthropic: "", openai: "", openrouter: "" },
+  apiKeys: { anthropic: "", openai: "", openrouter: "", custom: "" },
   models: {
     anthropic: "claude-opus-5",
     openai: "gpt-5",
     openrouter: "anthropic/claude-opus-5",
+    custom: "",
   },
+  customBaseUrl: "",
   maxSteps: 40,
   reasoningEffort: "standard",
   ocrMode: "images",

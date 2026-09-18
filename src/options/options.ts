@@ -9,6 +9,9 @@ const $ = <T extends HTMLElement>(id: string): T =>
 const tabsEl = $("provider-tabs");
 const providerHint = $("provider-hint");
 const apiKeyEl = $<HTMLInputElement>("apiKey");
+const baseUrlEl = $<HTMLInputElement>("baseUrl");
+const baseUrlRow = $("base-url-row");
+const keyHint = $("key-hint");
 const modelEl = $<HTMLInputElement>("model");
 const modelList = $<HTMLDataListElement>("model-list");
 const modelStatus = $("model-status");
@@ -30,6 +33,9 @@ const fetched = new Map<ProviderId, string[]>();
 function captureVisibleFields(): void {
   settings.apiKeys[settings.provider] = apiKeyEl.value.trim();
   settings.models[settings.provider] = modelEl.value.trim();
+  // The base URL belongs to the custom provider alone, so it is only read back
+  // while that provider is the one on screen.
+  if (settings.provider === "custom") settings.customBaseUrl = baseUrlEl.value.trim();
 }
 
 function renderModelOptions(): void {
@@ -53,12 +59,22 @@ function render(): void {
     );
   });
 
-  providerHint.innerHTML =
-    `Get a key at <a href="${provider.keyUrl}" target="_blank" rel="noreferrer">` +
-    `${new URL(provider.keyUrl).host}</a>.` +
-    (provider.id === "openrouter"
-      ? " OpenRouter proxies many vendors' models behind one key."
-      : "");
+  const custom = provider.id === "custom";
+
+  providerHint.innerHTML = custom
+    ? "Point VLESS at any OpenAI-compatible server. Nothing about it is assumed — the " +
+      "base URL, the key and the model id are all yours to set."
+    : `Get a key at <a href="${provider.keyUrl}" target="_blank" rel="noreferrer">` +
+      `${new URL(provider.keyUrl).host}</a>.` +
+      (provider.id === "openrouter"
+        ? " OpenRouter proxies many vendors' models behind one key."
+        : "");
+
+  baseUrlRow.hidden = !custom;
+  baseUrlEl.value = settings.customBaseUrl;
+  keyHint.textContent = custom
+    ? "Leave empty for a local server that does not ask for one."
+    : "Each provider's key is remembered separately, so switching back does not lose it.";
 
   apiKeyEl.value = settings.apiKeys[provider.id] ?? "";
   apiKeyEl.placeholder = provider.keyHint;
@@ -95,7 +111,7 @@ refreshBtn.addEventListener("click", async () => {
   modelStatus.textContent = "Fetching…";
 
   try {
-    const models = await listModels(provider, apiKeyEl.value.trim());
+    const models = await listModels(provider, apiKeyEl.value.trim(), baseUrlEl.value.trim());
     fetched.set(provider, models);
     renderModelOptions();
     modelStatus.textContent = `${models.length} models available. Click the field to browse them.`;
@@ -117,7 +133,28 @@ $("save").addEventListener("click", async () => {
   settings.sendScreenshot = sendScreenshotEl.checked;
   settings.fullPageCapture = fullPageCaptureEl.checked;
 
-  if (!settings.apiKeys[settings.provider]) {
+  if (settings.provider === "custom") {
+    const url = settings.customBaseUrl;
+    if (!url) {
+      savedEl.className = "bad";
+      savedEl.textContent = "Add a base URL before saving.";
+      return;
+    }
+    // Catch a typo here rather than as an opaque network error mid-task.
+    try {
+      const parsed = new URL(url);
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") throw new Error();
+    } catch {
+      savedEl.className = "bad";
+      savedEl.textContent = "That base URL is not a valid http:// or https:// address.";
+      return;
+    }
+    if (!settings.models.custom) {
+      savedEl.className = "bad";
+      savedEl.textContent = "Enter a model id — Refresh list will ask the server for them.";
+      return;
+    }
+  } else if (!settings.apiKeys[settings.provider]) {
     savedEl.className = "bad";
     savedEl.textContent = `Add a ${PROVIDERS[settings.provider].label} key before saving.`;
     return;

@@ -85,10 +85,19 @@ function toStopReason(raw: string | null | undefined, hasToolCalls: boolean): St
   return "end_turn";
 }
 
-const ENDPOINTS: Record<Exclude<ProviderId, "anthropic">, string> = {
+const ENDPOINTS: Record<Exclude<ProviderId, "anthropic" | "custom">, string> = {
   openai: "https://api.openai.com/v1",
   openrouter: "https://openrouter.ai/api/v1",
 };
+
+/** The bit of a base URL worth showing in the wire log and in errors. */
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return url;
+  }
+}
 
 /**
  * Serves both OpenAI and OpenRouter — OpenRouter exposes the same chat
@@ -98,10 +107,17 @@ export function createOpenAIPlanner(
   provider: Exclude<ProviderId, "anthropic">,
   apiKey: string,
   model: string,
+  /** Required for "custom"; ignored for the two providers with fixed endpoints. */
+  baseUrl?: string,
 ): Planner {
+  const endpoint = provider === "custom" ? (baseUrl ?? "") : ENDPOINTS[provider];
+
   const client = new OpenAI({
-    apiKey,
-    baseURL: ENDPOINTS[provider],
+    // A local server - Ollama, LM Studio, vLLM - usually wants no key at all,
+    // but the SDK refuses to construct without one. The placeholder is sent
+    // and ignored; a server that does check will reject it, which is correct.
+    apiKey: apiKey || "not-required",
+    baseURL: endpoint,
     dangerouslyAllowBrowser: true,
     defaultHeaders:
       provider === "openrouter"
@@ -110,7 +126,12 @@ export function createOpenAIPlanner(
         : undefined,
   });
 
-  const label = provider === "openai" ? "OpenAI" : "OpenRouter";
+  const label =
+    provider === "openai" ? "OpenAI"
+    : provider === "openrouter" ? "OpenRouter"
+    // Name the host, not "custom": the wire log's job is to say where the
+    // bytes went, and "Custom gpt-4o" would not answer that.
+    : hostOf(endpoint);
 
   return {
     label: `${label} ${model}`,

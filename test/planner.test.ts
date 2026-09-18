@@ -93,6 +93,61 @@ want(THINKING_BUDGET.off === 0, "the off setting still buys reasoning tokens");
 want(THINKING_BUDGET.standard > 1024, "the standard budget is below Anthropic's minimum");
 want(THINKING_BUDGET.deep > THINKING_BUDGET.standard, "deep does not think harder than standard");
 
+// ------------------------------------------------- the custom OpenAI-compatible provider
+//
+// "custom" is any server speaking OpenAI's chat-completions API: a gateway, a
+// self-hosted model, or Ollama / LM Studio on localhost. Nothing about it is
+// known in advance, so the two things it cannot work without - a base URL and a
+// model id - have to be refused clearly, while the one thing a local server
+// genuinely does not need - a key - must not be demanded.
+
+{
+  const { createPlanner, PlannerError } = await import("../src/background/providers/index");
+  const { normaliseSettings } = await import("../src/shared/types");
+
+  const custom = (over: Record<string, unknown> = {}) =>
+    normaliseSettings({
+      provider: "custom",
+      customBaseUrl: "http://localhost:11434/v1",
+      models: { custom: "llama3.2" },
+      apiKeys: { custom: "" },
+      ...over,
+    });
+
+  const refusal = (settings: unknown): string => {
+    try {
+      createPlanner(settings as never);
+      return "";
+    } catch (error) {
+      return error instanceof PlannerError ? error.message : `wrong error type: ${String(error)}`;
+    }
+  };
+
+  // A local server needs no key, and demanding one would make Ollama unusable.
+  const planner = createPlanner(custom());
+  want(!!planner, "a custom provider with no key was refused");
+  // The label names the host, because the wire log's job is to say where the
+  // bytes went - "Custom llama3.2" would not answer that.
+  want(planner.label.includes("localhost:11434"),
+    `the label does not name the host: ${planner.label}`);
+  want(planner.label.includes("llama3.2"), `the label does not name the model: ${planner.label}`);
+
+  want(/base URL/i.test(refusal(custom({ customBaseUrl: "" }))),
+    `no base URL was not refused clearly: ${refusal(custom({ customBaseUrl: "" }))}`);
+  want(/model/i.test(refusal(custom({ models: { custom: "" } }))),
+    "a missing model id was not refused clearly");
+
+  // The other three still require a key - only "custom" is exempt.
+  want(/API key/i.test(refusal(normaliseSettings({ provider: "openai" }))),
+    "OpenAI without a key was not refused");
+  want(/API key/i.test(refusal(normaliseSettings({ provider: "anthropic" }))),
+    "Anthropic without a key was not refused");
+
+  // A key, when given, is used rather than ignored.
+  want(!!createPlanner(custom({ apiKeys: { custom: "sk-test" } })),
+    "a custom provider with a key was refused");
+}
+
 console.log(JSON.stringify({
   assistantBlockOrder: content.map((b) => b.type),
   budgets: THINKING_BUDGET,
