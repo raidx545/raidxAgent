@@ -79,7 +79,10 @@ export const TOOLS: ToolSpec[] = [
     name: "key",
     description:
       "Press a key, with modifiers if needed: \"Enter\", \"Escape\", \"Tab\", \"ArrowDown\", " +
-      "\"ctrl+a\", \"shift+Tab\", \"meta+Enter\". Goes to the focused element.",
+      "\"ctrl+a\", \"shift+Tab\", \"meta+Enter\". Goes to the focused element (marked focused in " +
+      "the page read). Behaves like a real key: Enter submits a single-line field's form and " +
+      "activates a focused button or link, Tab moves focus, Space toggles a focused checkbox. " +
+      "The result says what the key actually did.",
     parameters: {
       type: "object",
       properties: { key: { type: "string" } },

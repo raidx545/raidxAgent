@@ -290,5 +290,6 @@ export function stateOf(node: CapturedNode): string[] {
   if (a.readonly === "true" || a["aria-readonly"] === "true") out.push("readonly");
   if (a.required === "true" || a["aria-required"] === "true") out.push("required");
   if (a["aria-invalid"] && a["aria-invalid"] !== "false") out.push("invalid");
+  if (a.focused === "true") out.push("focused");
   return out;
 }

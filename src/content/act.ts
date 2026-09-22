@@ -2,6 +2,7 @@ import type { ActionResult, AgentAction } from "../shared/types";
 import { capturedElement, captureDom, lastCapture, liveGeneration, walkCapture } from "../capture/dom";
 import { scrollByPixels } from "../capture/scroller";
 import { CLICK_START, settle } from "./settle";
+import { parseKey, type KeyCombo } from "../shared/keys";
 
 const fail = (detail: string, summary?: string): ActionResult => ({ ok: false, detail, summary });
 const done = (detail: string, summary?: string): ActionResult => ({ ok: true, detail, summary });
@@ -27,39 +28,179 @@ function openDialogs(): string[] {
   return found;
 }
 
-interface KeyCombo { key: string; ctrl: boolean; shift: boolean; alt: boolean; meta: boolean }
-
-/** "ctrl+shift+Enter" -> its parts. The last segment is the key itself. */
-function parseKey(raw: string): KeyCombo {
-  const parts = raw.split("+").map((p) => p.trim()).filter(Boolean);
-  const key = parts.pop() ?? "";
-  const mods = new Set(parts.map((p) => p.toLowerCase()));
-  return {
-    key: normaliseKey(key),
-    ctrl: mods.has("ctrl") || mods.has("control"),
-    shift: mods.has("shift"),
-    alt: mods.has("alt") || mods.has("option"),
-    meta: mods.has("meta") || mods.has("cmd") || mods.has("command"),
-  };
-}
-
-/** Accepts the spellings a model reaches for and returns the DOM key name. */
-function normaliseKey(key: string): string {
-  const named: Record<string, string> = {
-    enter: "Enter", return: "Enter", esc: "Escape", escape: "Escape", tab: "Tab",
-    space: " ", spacebar: " ", backspace: "Backspace", delete: "Delete", del: "Delete",
-    up: "ArrowUp", down: "ArrowDown", left: "ArrowLeft", right: "ArrowRight",
-    arrowup: "ArrowUp", arrowdown: "ArrowDown", arrowleft: "ArrowLeft", arrowright: "ArrowRight",
-    home: "Home", end: "End", pageup: "PageUp", pagedown: "PageDown",
-  };
-  return named[key.toLowerCase()] ?? key;
-}
-
 function codeFor(key: string): string {
   if (key.length === 1 && /[a-z]/i.test(key)) return `Key${key.toUpperCase()}`;
   if (key.length === 1 && /[0-9]/.test(key)) return `Digit${key}`;
   if (key === " ") return "Space";
   return key;
+}
+
+/** Reports whether the DOM changed between the call and the check. */
+function watchChanges(): () => boolean {
+  let changed = false;
+  const observer = new MutationObserver(() => { changed = true; });
+  observer.observe(document.documentElement, {
+    childList: true, subtree: true, attributes: true, characterData: true,
+  });
+  return () => {
+    observer.disconnect();
+    return changed;
+  };
+}
+
+const TEXT_INPUT_TYPES = new Set([
+  "text", "search", "email", "url", "tel", "password", "number", "",
+]);
+
+function isTextField(el: Element): el is HTMLInputElement | HTMLTextAreaElement {
+  return el instanceof HTMLTextAreaElement ||
+    (el instanceof HTMLInputElement && TEXT_INPUT_TYPES.has(el.type));
+}
+
+/** Controls a native Enter or Space activates, exactly as the browser defines them. */
+function nativelyActivated(el: Element, key: string): boolean {
+  if (el.matches(":disabled")) return false;
+  if (el instanceof HTMLButtonElement || el.tagName === "SUMMARY") return true;
+  if (el instanceof HTMLInputElement) {
+    if (["submit", "button", "reset", "image"].includes(el.type)) return true;
+    // Space toggles a checkbox or radio; Enter does not.
+    return key === " " && (el.type === "checkbox" || el.type === "radio");
+  }
+  // Enter follows a link; Space scrolls the page instead.
+  return key === "Enter" && el instanceof HTMLAnchorElement && el.hasAttribute("href");
+}
+
+/** Sequential focus order, the way Tab walks it. */
+function focusables(): HTMLElement[] {
+  const all = Array.from(document.querySelectorAll<HTMLElement>(
+    "a[href], button, input, select, textarea, summary, iframe, [tabindex], [contenteditable=''], [contenteditable=true]",
+  )).filter((el) => {
+    if (el.matches(":disabled") || el.tabIndex < 0) return false;
+    if (el instanceof HTMLInputElement && el.type === "hidden") return false;
+    const style = getComputedStyle(el);
+    return style.visibility !== "hidden" && style.display !== "none" && el.getClientRects().length > 0;
+  });
+  // Positive tabindex first, in order; then everything else in document order.
+  const positive = all.filter((el) => el.tabIndex > 0).sort((a, b) => a.tabIndex - b.tabIndex);
+  return [...positive, ...all.filter((el) => el.tabIndex === 0)];
+}
+
+/** Inserts text at the caret, as typing would. */
+function insertAtCaret(el: HTMLElement, text: string): boolean {
+  if (isTextField(el)) {
+    if (el.readOnly || el.disabled) return false;
+    const start = el.selectionStart ?? el.value.length;
+    const end = el.selectionEnd ?? el.value.length;
+    const next = el.value.slice(0, start) + text + el.value.slice(end);
+    setNativeValue(el, next);
+    try { el.setSelectionRange(start + text.length, start + text.length); } catch { /* number inputs */ }
+    el.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: text }));
+    return true;
+  }
+  if (el.isContentEditable) {
+    try {
+      return document.execCommand(text === "\n" ? "insertParagraph" : "insertText", false, text);
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
+
+/**
+ * What the browser itself does for a key nobody handled.
+ *
+ * Only the browser's native behaviour is reproduced - never a guess at what an
+ * application's custom widget would do. A div with role="button" is activated
+ * by the page's own key handler, which has already run; clicking it here as
+ * well would press it twice. Returns what happened, or null for nothing.
+ */
+function nativeKeyAction(el: HTMLElement, combo: KeyCombo): string | null {
+  const { key } = combo;
+  const modified = combo.ctrl || combo.meta || combo.alt;
+
+  if (key === "Escape") {
+    // A native <dialog> ignores a dispatched Escape.
+    const dialog = document.querySelector<HTMLDialogElement>("dialog[open]");
+    if (dialog) { dialog.close(); return "closed the dialog"; }
+    return null;
+  }
+
+  if (key.toLowerCase() === "a" && (combo.ctrl || combo.meta) && !combo.alt) {
+    if (isTextField(el)) { el.select(); return "selected the field's text"; }
+    if (el.isContentEditable) {
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      getSelection()?.removeAllRanges();
+      getSelection()?.addRange(range);
+      return "selected the text";
+    }
+    return null;
+  }
+
+  if (modified) return null;
+
+  if (key === "Tab") {
+    const order = focusables();
+    if (order.length === 0) return null;
+    const at = order.indexOf(el);
+    const next = combo.shift
+      ? order[at <= 0 ? order.length - 1 : at - 1]
+      : order[at < 0 || at === order.length - 1 ? 0 : at + 1];
+    next.focus();
+    return `focus moved to ${describe(next)}`;
+  }
+
+  if ((key === "Enter" || key === " ") && nativelyActivated(el, key)) {
+    realClick(el);
+    return `activated ${describe(el)}`;
+  }
+
+  if (key === "Enter") {
+    if (el instanceof HTMLTextAreaElement || (el.isContentEditable && !isTextField(el))) {
+      return insertAtCaret(el, "\n") ? "started a new line" : null;
+    }
+    if (el instanceof HTMLInputElement && el.form) {
+      // Implicit submission: what Enter in a single-line field does.
+      el.form.requestSubmit();
+      return "submitted the form";
+    }
+    return null;
+  }
+
+  if (key === "Backspace" || key === "Delete") {
+    if (isTextField(el) && !el.readOnly && !el.disabled) {
+      let start = el.selectionStart ?? el.value.length;
+      let end = el.selectionEnd ?? el.value.length;
+      if (start === end) {
+        if (key === "Backspace") start = Math.max(0, start - 1);
+        else end = Math.min(el.value.length, end + 1);
+      }
+      if (start === end) return null;
+      setNativeValue(el, el.value.slice(0, start) + el.value.slice(end));
+      try { el.setSelectionRange(start, start); } catch { /* number inputs */ }
+      el.dispatchEvent(new InputEvent("input", {
+        bubbles: true, inputType: key === "Backspace" ? "deleteContentBackward" : "deleteContentForward",
+      }));
+      return "deleted a character";
+    }
+    if (el.isContentEditable) {
+      try {
+        return document.execCommand(key === "Backspace" ? "delete" : "forwardDelete")
+          ? "deleted a character" : null;
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  }
+
+  // A printable character typed into a field.
+  if ([...key].length === 1) {
+    return insertAtCaret(el, key) ? `typed ${JSON.stringify(key)}` : null;
+  }
+
+  return null;
 }
 
 function describeKey(c: KeyCombo): string {
@@ -445,7 +586,13 @@ export async function act(action: AgentAction, generation?: number): Promise<Act
       case "scroll": {
         const up = input.direction === "up";
         const direction = up ? -1 : 1;
-        const amount = typeof input.amount === "number" ? input.amount : innerHeight * 0.8;
+        // Direction comes from `direction` alone. A negative amount used to
+        // reverse it silently: "down" by -500 scrolled up, found the top, and
+        // reported "already at the bottom" - a false edge the planner trusted.
+        const given = typeof input.amount === "number" && Number.isFinite(input.amount)
+          ? Math.abs(input.amount)
+          : 0;
+        const amount = given > 0 ? given : innerHeight * 0.8;
 
         // Not `scrollBy` on the window: an application shell keeps the window
         // pinned at zero and scrolls a panel inside it, so scrolling the window
@@ -483,10 +630,12 @@ export async function act(action: AgentAction, generation?: number): Promise<Act
       case "key": {
         const combo = parseKey(String(input.key ?? ""));
         if (!combo.key) return fail("No key given.");
-        const target = (document.activeElement ?? document.body) as HTMLElement;
+        let target = (document.activeElement ?? document.body) as HTMLElement;
+        while (target.shadowRoot?.activeElement) target = target.shadowRoot.activeElement as HTMLElement;
         const init: KeyboardEventInit = {
           bubbles: true,
           cancelable: true,
+          composed: true,
           key: combo.key,
           code: codeFor(combo.key),
           ctrlKey: combo.ctrl,
@@ -494,29 +643,29 @@ export async function act(action: AgentAction, generation?: number): Promise<Act
           altKey: combo.alt,
           metaKey: combo.meta,
         };
-        target.dispatchEvent(new KeyboardEvent("keydown", init));
-        target.dispatchEvent(new KeyboardEvent("keypress", init));
+
+        const changes = watchChanges();
+        // A handler that calls preventDefault has taken the key - a chat box
+        // sending on Enter, a list moving its selection - and the browser's own
+        // action must not happen on top of it, or the message goes twice.
+        const taken =
+          !target.dispatchEvent(new KeyboardEvent("keydown", init)) ||
+          !target.dispatchEvent(new KeyboardEvent("keypress", init));
         target.dispatchEvent(new KeyboardEvent("keyup", init));
 
-        // A synthetic Escape does not close a native <dialog>, and a synthetic
-        // ctrl+a does not select - the browser only honours its own trusted
-        // events. Do the two that matter by hand so the shortcut actually works.
-        if (combo.key === "Escape") {
-          document.querySelector<HTMLDialogElement>("dialog[open]")?.close();
-        }
-        if (combo.key.toLowerCase() === "a" && (combo.ctrl || combo.meta)) {
-          if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
-            target.select();
-          } else if (target.isContentEditable) {
-            const range = document.createRange();
-            range.selectNodeContents(target);
-            getSelection()?.removeAllRanges();
-            getSelection()?.addRange(range);
-          }
-        }
+        // The browser only performs a key's own action for keys a person
+        // pressed; for a dispatched event it does nothing at all. Enter did
+        // not submit, Tab did not move focus, a letter did not type - and every
+        // one was reported as "Pressed". Do what the browser would have done.
+        const effect = taken ? "the page handled it" : nativeKeyAction(target, combo);
 
         await settle();
-        return done(`Pressed ${describeKey(combo)}.`, `Pressed ${describeKey(combo)}.`);
+        const changed = changes();
+        const what = effect ?? (changed ? "the page changed" : "nothing on the page reacted");
+        return done(
+          `Pressed ${describeKey(combo)} on ${target === document.body ? "the page" : describe(target)} - ${what}.`,
+          `Pressed ${describeKey(combo)}.`,
+        );
       }
 
       case "find_text":

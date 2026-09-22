@@ -7,7 +7,7 @@ import { TranscriptView } from "../../src/sidepanel/transcript";
 import { act } from "../../src/content/act";
 import { findScroller, scrollState } from "../../src/capture/scroller";
 import { renderPage } from "../../src/background/wire";
-import { CLICK_START, settle } from "../../src/content/settle";
+import { CLICK_START, nextFrame, settle } from "../../src/content/settle";
 import { detect } from "../../src/pii/detect";
 import { verhoeffCheckDigit } from "../../src/pii/checksums";
 import type { Capture, ScreenshotMeta } from "../../src/capture/types";
@@ -246,6 +246,7 @@ async function run(): Promise<void> {
   await failedMeasurementScenario();
   await actionScenario();
   await controlStateScenario();
+  await keyScenario();
   await appShellScrollScenario();
   await dialogCaptureScenario();
   await responsivenessScenario();
@@ -664,6 +665,66 @@ async function controlStateScenario(): Promise<void> {
   const fs = await act({ name: "type" as never, input: { element_id: idOf("cs-fs"), text: "x" } }, dom.generation);
   check("state: typing into a disabled fieldset is refused",
     !fs.ok && host.querySelector<HTMLInputElement>("#cs-fs")!.value === "", fs.detail, true);
+
+  host.remove();
+}
+
+/**
+ * Keys do what keys do.
+ *
+ * The browser performs a key's own action only for a key a person pressed. A
+ * dispatched Enter submitted nothing, Tab moved no focus, a letter typed
+ * nothing - each reported as "Pressed". And where the page does take the key
+ * itself, the native action must not happen as well, or a chat message goes
+ * out twice.
+ */
+async function keyScenario(): Promise<void> {
+  const host = document.createElement("div");
+  host.innerHTML = `
+    <form id="ks-f" action="javascript:void 0"><input id="ks-q" value="shoes"></form>
+    <button id="ks-b" type="button">Continue</button>
+    <input id="ks-c" type="checkbox" aria-label="Agree">
+    <input id="ks-1"><input id="ks-2">
+    <form id="ks-cf" action="javascript:void 0"><input id="ks-chat" aria-label="Type a message"></form>`;
+  document.body.appendChild(host);
+  const log: string[] = [];
+  const on = (sel: string, type: string, fn: (e: Event) => void) => host.querySelector(sel)!.addEventListener(type, fn);
+  on("#ks-f", "submit", (e) => { e.preventDefault(); log.push("submit"); });
+  on("#ks-b", "click", () => log.push("click"));
+  on("#ks-cf", "submit", (e) => { e.preventDefault(); log.push("chat-form-submit"); });
+  on("#ks-chat", "keydown", (e) => { if ((e as KeyboardEvent).key === "Enter") { e.preventDefault(); log.push("chat-send"); } });
+  await new Promise((r) => setTimeout(r, 100));
+
+  const press = async (sel: string, key: string) => {
+    host.querySelector<HTMLElement>(sel)!.focus();
+    return act({ name: "key" as never, input: { key } });
+  };
+  const $ = <T extends HTMLElement>(sel: string) => host.querySelector<T>(sel)!;
+
+  const enter = await press("#ks-q", "Enter");
+  check("keys: Enter in a single-line field submits its form", log.includes("submit"), enter.detail, true);
+  await press("#ks-b", "Enter");
+  check("keys: Enter on a focused button activates it", log.includes("click"), log.join(","), true);
+  await press("#ks-c", "Space");
+  check("keys: Space toggles a focused checkbox", $<HTMLInputElement>("#ks-c").checked, "", true);
+  await press("#ks-1", "Tab");
+  check("keys: Tab moves focus to the next field", document.activeElement === $("#ks-2"),
+    `focus is on #${(document.activeElement as HTMLElement | null)?.id}`, true);
+  $<HTMLInputElement>("#ks-2").value = "";
+  await press("#ks-2", "x");
+  check("keys: a printable key types into the field", $<HTMLInputElement>("#ks-2").value === "x",
+    JSON.stringify($<HTMLInputElement>("#ks-2").value), true);
+  const chat = await press("#ks-chat", "Enter");
+  check("keys: a key the page takes is not also acted on natively",
+    log.filter((x) => x === "chat-send").length === 1 && !log.includes("chat-form-submit"), chat.detail, true);
+
+  // And the capture records where focus is, for the safety gate to judge by.
+  $("#ks-b").focus();
+  const dom = captureDom();
+  const focusedIds: string[] = [];
+  const walk = (x: typeof dom.root): void => { if (x.attrs.focused) focusedIds.push(x.attrs.id ?? "?"); x.children.forEach(walk); };
+  walk(dom.root);
+  check("keys: the capture records the focused element", focusedIds.join() === "ks-b", focusedIds.join(), true);
 
   host.remove();
 }
@@ -1267,7 +1328,7 @@ async function transcriptScenario(): Promise<void> {
   // -- the collision ---------------------------------------------------------
   view.render({ id: "e1", role: "step", action: "click", text: "Clicked Compose" } as never);
   view.render({ id: "e1", role: "assistant", text: PROSE } as never);
-  await new Promise((r) => requestAnimationFrame(r));
+  await nextFrame();
 
   const prose = Array.from(container.querySelectorAll<HTMLElement>(".entry.assistant"))
     .find((el) => el.textContent === PROSE);
@@ -1296,7 +1357,7 @@ async function transcriptScenario(): Promise<void> {
     id: "e2", role: "system",
     text: "data:image/png;base64," + "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVoxMjM0NTY3ODkw".repeat(6),
   } as never);
-  await new Promise((r) => requestAnimationFrame(r));
+  await nextFrame();
   check("panel: a long unbreakable string wraps instead of scrolling the panel sideways",
     container.scrollWidth <= container.clientWidth + 1,
     `content is ${container.scrollWidth}px in a ${container.clientWidth}px column`);
@@ -1334,7 +1395,7 @@ async function transcriptScenario(): Promise<void> {
   for (let i = 0; i < 14; i++) {
     view.render({ id: `s${i}`, role: "step", action: "scroll", text: `Scrolled to y=${i * 200}` } as never);
   }
-  await new Promise((r) => requestAnimationFrame(r));
+  await nextFrame();
   const group = container.querySelector<HTMLElement>(".steps.folded");
   check("panel: a long run of actions folds itself", !!group,
     `${container.querySelectorAll(".steps").length} group(s), none folded`);

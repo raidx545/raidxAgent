@@ -1,6 +1,7 @@
 import type { AgentAction } from "../shared/types";
 import type { CapturedNode, DomCapture } from "../capture/types";
-import { allText, findNode } from "../capture/dom";
+import { allText, findNode, walkCapture } from "../capture/dom";
+import { parseKey } from "../shared/keys";
 
 /**
  * Field kinds we refuse to fill regardless of what the planner asked for.
@@ -98,6 +99,54 @@ function looksIdentifier(node: CapturedNode | undefined): boolean {
   return IDENTIFIER_PATTERNS.some((p) => p.test(`${describe(node)} ${node.attrs.name ?? ""}`));
 }
 
+function focusedNode(capture: DomCapture | undefined): CapturedNode | undefined {
+  if (!capture) return undefined;
+  for (const node of walkCapture(capture.root)) if (node.attrs.focused === "true") return node;
+  return undefined;
+}
+
+function isTextEntry(node: CapturedNode): boolean {
+  if (["textbox", "searchbox", "combobox", "password"].includes(node.role)) return true;
+  if (node.tag === "textarea") return true;
+  return node.tag === "input" &&
+    ["", "text", "search", "email", "url", "tel", "number", "password"].includes(node.attrs.type ?? "");
+}
+
+/**
+ * Whether pressing Enter in this field needs the user's sign-off.
+ *
+ * Pressing Enter in a text box is usually how you *fill in* a form, not how you
+ * commit it. Composing a mail means typing a recipient and pressing Enter to
+ * turn it into a chip, then a subject, then a body - three confirmations for
+ * three keystrokes that change nothing outside the draft, before the one that
+ * matters. So a field that is plainly for entry is let through.
+ *
+ * Except where Enter is the send. In a chat box - "Type a message", "Message
+ * #general", "Add a comment" - Enter does not start a new line, it posts, and
+ * "message" and "comment" used to be on the let-through list, so the agent
+ * could send a WhatsApp or Slack message the user never approved. A mail body
+ * says "body", and Enter there is a newline, so it stays allowed.
+ */
+function enterInField(el: CapturedNode, capture: DomCapture | undefined, verb: string): Gate | undefined {
+  const words = `${describe(el)} ${el.role}`;
+  // Searching comes first: "Search messages" is a search box, not a chat box.
+  if (/search|query|find|filter/i.test(words) || el.role === "searchbox") return undefined;
+  const sends = /\b(message|messages|chat|comment|reply|post|tweet|send|respond)\b/i.test(words) &&
+    !/\bbody\b/i.test(words);
+  const ordinaryEntry = !sends && (
+    /recipient|subject|body|compose|note|description|title|\btags?\b/i.test(words) ||
+    /^\s*(to|cc|bcc)\b/i.test(el.label || describe(el)) ||
+    el.role === "combobox"
+  );
+  if (ordinaryEntry) return undefined;
+  return {
+    verdict: "confirm",
+    summary: sends
+      ? `${verb} ${JSON.stringify(describe(el).slice(0, 40))} and press Enter on ${capture?.title ?? "this page"}? In a chat or comment box, Enter sends it.`
+      : `${verb} ${JSON.stringify(describe(el).slice(0, 40))} and submit the form on ${capture?.title ?? "this page"}?`,
+  };
+}
+
 /**
  * Decides whether an action runs, needs the user's sign-off, or is refused
  * outright. Runs before every action — the planner's own judgement is a
@@ -158,27 +207,36 @@ export function gate(
   }
 
   if (action.name === "type" && action.input.submit === true && el) {
-    // Pressing Enter in a text box is usually how you *fill in* a form, not how
-    // you commit it. Composing a message means typing a recipient and pressing
-    // Enter to turn it into a chip, then a subject, then a body - three
-    // confirmations for three keystrokes that change nothing outside the draft,
-    // before the one that matters.
-    //
-    // What actually needs approval is the click on Send, Pay or Delete, and
-    // that is caught above by the click rule. Credential fields are refused
-    // outright regardless. So this rule only has to cover the case where Enter
-    // itself commits something: an unknown form with no obvious entry purpose.
-    const ordinaryEntry =
-      /search|query|find|filter|recipient|\bto\b|\bcc\b|\bbcc\b|subject|message|body|compose|note|comment|description|title/i.test(
-        `${describe(el)} ${el.role}`,
-      );
-    if (!ordinaryEntry) {
+    const verdict = enterInField(el, capture, "Fill");
+    if (verdict) return verdict;
+  }
+
+  // A key press goes to whatever has focus, which the capture records - and
+  // it can commit exactly what a click can. Enter on a focused "Send" button
+  // sends; ctrl+Enter sends a Gmail draft; Enter in a chat box sends the
+  // message. None of it used to reach the gate at all.
+  if (action.name === "key") {
+    const combo = parseKey(String(action.input.key ?? ""));
+    const where = capture?.title ?? "this page";
+    if (combo.key === "Enter" && (combo.ctrl || combo.meta)) {
       return {
         verdict: "confirm",
-        summary:
-          `Fill ${JSON.stringify(describe(el).slice(0, 40))} and submit the form on ` +
-          `${capture?.title ?? "this page"}?`,
+        summary: `Press ${String(action.input.key)} on ${where}? In most apps this sends or submits what is being written.`,
       };
+    }
+    if (combo.key === "Enter" || combo.key === " ") {
+      const target = focusedNode(capture);
+      if (target && isTextEntry(target)) {
+        if (combo.key === "Enter") {
+          const verdict = enterInField(target, capture, "Press Enter in");
+          if (verdict) return verdict;
+        }
+      } else if (target && IRREVERSIBLE_PATTERNS.some((p) => p.test(`${describe(target)} ${target.role}`))) {
+        return {
+          verdict: "confirm",
+          summary: `Press ${combo.key === " " ? "Space" : "Enter"} on ${JSON.stringify(describe(target).slice(0, 60))} on ${where}?`,
+        };
+      }
     }
   }
 

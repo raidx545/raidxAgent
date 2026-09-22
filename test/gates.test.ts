@@ -145,6 +145,67 @@ want(
   "a real card number was not refused",
 );
 
+// ------------------------------------------- where Enter is the send
+//
+// "message" and "comment" were on the let-through list, so typing into a chat
+// box with submit set - which is how WhatsApp and Slack send - went out with no
+// confirmation at all. A mail body says "body", where Enter is only a newline.
+
+function chat(focusedLabel?: string): DomCapture {
+  id = 0;
+  const f = (label: string): Record<string, string> => (label === focusedLabel ? { focused: "true" } : {});
+  const nodes = [
+    n({ tag: "div", role: "textbox", label: "Type a message", attrs: f("Type a message") }),
+    n({ tag: "input", role: "textbox", label: "Search messages", attrs: f("Search messages") }),
+    n({ tag: "div", role: "textbox", label: "Add a comment…", attrs: f("Add a comment…") }),
+    n({ tag: "button", role: "button", text: "Send", attrs: f("Send") }),
+    n({ tag: "button", role: "button", text: "Bold", attrs: f("Bold") }),
+    n({ tag: "input", role: "combobox", label: "To recipients", attrs: f("To recipients") }),
+  ];
+  return {
+    url: "https://chat.example.com/", origin: "https://chat.example.com", title: "Chat",
+    capturedAt: 1,
+    viewport: { width: 1400, height: 900, dpr: 2, scrollX: 0, scrollY: 0, pageHeight: 900 },
+    root: n({ tag: "body", role: "document", children: nodes }),
+    stats: { examined: 1, kept: 1, pruned: 0 },
+  };
+}
+const chatPage = chat();
+const inChat = (label: string): number => {
+  for (const node of chatPage.root.children) if (node.label === label || node.text === label) return node.id;
+  throw new Error(`fixture: no ${label}`);
+};
+
+want(gate({ name: "type", input: { element_id: inChat("Type a message"), text: "hi", submit: true } }, chatPage, true)
+  .verdict === "confirm", "typing into a chat box and pressing Enter sent the message without asking");
+want(gate({ name: "type", input: { element_id: inChat("Add a comment…"), text: "hi", submit: true } }, chatPage, true)
+  .verdict === "confirm", "posting a comment with Enter did not ask");
+want(gate({ name: "type", input: { element_id: inChat("Search messages"), text: "hi", submit: true } }, chatPage, true)
+  .verdict === "allow", "searching messages was mistaken for sending one");
+
+// ------------------------------------------------- the key tool is gated too
+//
+// It used to bypass the gate completely: Enter on a focused Send button, or
+// ctrl+Enter in a draft, sent with no question asked.
+
+const key = (k: string, focused?: string) =>
+  gate({ name: "key", input: { key: k } }, chat(focused), true).verdict;
+
+want(key("Enter", "Send") === "confirm", "Enter on a focused Send button was not confirmed");
+want(key("Space", "Send") === "confirm", "Space on a focused Send button was not confirmed");
+want(key("Enter", "Type a message") === "confirm", "Enter in a focused chat box was not confirmed");
+want(key("ctrl+Enter", "Bold") === "confirm", "ctrl+Enter was not confirmed");
+want(key("cmd+Return") === "confirm", "cmd+Return was not confirmed");
+
+// And the ordinary presses stay free.
+want(key("Enter", "Search messages") === "allow", "Enter in a search box asked for confirmation");
+want(key("Enter", "To recipients") === "allow", "committing a recipient chip asked for confirmation");
+want(key("Enter", "Bold") === "allow", "Enter on a harmless toggle asked for confirmation");
+want(key("Escape", "Send") === "allow", "Escape asked for confirmation");
+want(key("Tab", "Type a message") === "allow", "Tab asked for confirmation");
+want(gate({ name: "key", input: { key: "Enter" } }, chat("Send"), false).verdict === "allow",
+  "the confirmation setting had no effect on key presses");
+
 console.log(JSON.stringify({
   identifiers: ["Aadhaar Number","PAN Card Number","Card number"].map(
     (f) => `${f}: ${verdict({ name: "type", input: { element_id: byLabel(f), text: "x" } })}`,

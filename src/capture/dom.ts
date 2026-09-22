@@ -315,6 +315,7 @@ function attrsOf(el: Element): Record<string, string> {
     attrs.filled = String(el.value.length > 0);
   }
 
+  if (el === focused) attrs.focused = "true";
   if (el instanceof HTMLInputElement && (el.type === "checkbox" || el.type === "radio")) {
     attrs.checked = el.indeterminate ? "mixed" : String(el.checked);
   }
@@ -514,12 +515,27 @@ export function capturedElement(id: number, from?: number): Element | undefined 
 export { ownTextMap };
 
 /** Builds the structured page capture. Pure read — touches nothing. */
+/**
+ * The element keyboard input goes to, looking through shadow roots.
+ *
+ * Recorded so that a key press can be judged: Enter in a search box and Enter
+ * on a focused "Send" button are the same tool call and very different acts.
+ */
+let focused: Element | null = null;
+
+function deepActiveElement(): Element | null {
+  let active = document.activeElement;
+  while (active?.shadowRoot?.activeElement) active = active.shadowRoot.activeElement;
+  return active === document.body || active === document.documentElement ? null : active;
+}
+
 export function captureDom(): DomCapture {
   examined = 0;
   pruned = 0;
   registry = [];
   generation++;
   pending = new WeakMap();
+  focused = deepActiveElement();
 
   const children = walk(document.body);
 
