@@ -247,6 +247,7 @@ async function run(): Promise<void> {
   await actionScenario();
   await controlStateScenario();
   await keyScenario();
+  await fieldFitScenario();
   await appShellScrollScenario();
   await dialogCaptureScenario();
   await responsivenessScenario();
@@ -725,6 +726,48 @@ async function keyScenario(): Promise<void> {
   const walk = (x: typeof dom.root): void => { if (x.attrs.focused) focusedIds.push(x.attrs.id ?? "?"); x.children.forEach(walk); };
   walk(dom.root);
   check("keys: the capture records the focused element", focusedIds.join() === "ks-b", focusedIds.join(), true);
+
+  host.remove();
+}
+
+/**
+ * A typed value is one the field actually holds.
+ *
+ * The browser drops a value its input type cannot hold, silently: a date in
+ * the wrong format left the field empty and was reported as typed.
+ */
+async function fieldFitScenario(): Promise<void> {
+  const host = document.createElement("div");
+  host.innerHTML = `
+    <input id="ff-date" type="date" aria-label="Date of birth">
+    <input id="ff-amb" type="date" aria-label="Start date">
+    <input id="ff-tel" type="tel" maxlength="10" aria-label="Mobile">
+    <input id="ff-rej" aria-label="Code">`;
+  document.body.appendChild(host);
+  // A page that refuses what it is given, as a strict input handler does.
+  host.querySelector("#ff-rej")!.addEventListener("input", (e) => { (e.target as HTMLInputElement).value = ""; });
+  await new Promise((r) => setTimeout(r, 100));
+
+  const dom = captureDom();
+  const ids = new Map<string, number>();
+  const walk = (x: typeof dom.root): void => { if (x.attrs.id) ids.set(x.attrs.id, x.id); x.children.forEach(walk); };
+  walk(dom.root);
+  const type = (id: string, text: string) =>
+    act({ name: "type" as never, input: { element_id: ids.get(id), text } }, dom.generation);
+  const val = (id: string) => host.querySelector<HTMLInputElement>(`#${id}`)!.value;
+
+  const date = await type("ff-date", "23/09/2026");
+  check("fit: an unambiguous date goes in, in the field's own format",
+    date.ok && val("ff-date") === "2026-09-23", `${date.detail} - value ${JSON.stringify(val("ff-date"))}`, true);
+  const amb = await type("ff-amb", "04/05/2026");
+  check("fit: an ambiguous date is refused, not guessed",
+    !amb.ok && val("ff-amb") === "", amb.detail, true);
+  const tel = await type("ff-tel", "+91 98765 43210");
+  check("fit: a phone number respects the field's length limit",
+    tel.ok && val("ff-tel") === "9876543210", `value ${JSON.stringify(val("ff-tel"))}`, true);
+  const rej = await type("ff-rej", "ABC123");
+  check("fit: a field the page empties is reported, not called typed",
+    !rej.ok, rej.detail, true);
 
   host.remove();
 }

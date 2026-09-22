@@ -3,6 +3,7 @@ import { capturedElement, captureDom, lastCapture, liveGeneration, walkCapture }
 import { scrollByPixels } from "../capture/scroller";
 import { CLICK_START, settle } from "./settle";
 import { parseKey, type KeyCombo } from "../shared/keys";
+import { fitToField } from "./fit";
 
 const fail = (detail: string, summary?: string): ActionResult => ({ ok: false, detail, summary });
 const done = (detail: string, summary?: string): ActionResult => ({ ok: true, detail, summary });
@@ -342,16 +343,68 @@ function setNativeValue(el: HTMLInputElement | HTMLTextAreaElement, value: strin
   else el.value = value;
 }
 
+/**
+ * Inputs whose `value` is not what a person types. Writing to a checkbox's
+ * value does not tick it - it silently changes what the form submits for it.
+ */
+const NOT_TYPED_INTO = new Set(["checkbox", "radio", "submit", "button", "reset", "image", "file", "hidden"]);
+
+function fieldLabel(el: HTMLInputElement | HTMLTextAreaElement): string {
+  return [
+    el.getAttribute("aria-label"),
+    ...Array.from(el.labels ?? []).map((l) => l.textContent),
+    el.placeholder,
+    el.name,
+    el.id,
+    el.autocomplete,
+  ].filter(Boolean).join(" ");
+}
+
 async function typeInto(el: Element, text: string, submit: boolean): Promise<ActionResult> {
+  let note = "";
+
+  if (el instanceof HTMLInputElement && NOT_TYPED_INTO.has(el.type)) {
+    return fail(
+      `${describe(el)} is a ${el.type} input, not a text field - nothing was typed. ` +
+        (el.type === "checkbox" || el.type === "radio" ? "Click it to change it." : "Click it instead."),
+      `${capitalise(humanName(el))} isn't something you type into.`,
+    );
+  }
+
   await bringIntoView(el);
   (el as HTMLElement).focus({ preventScroll: true });
 
   if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
+    const fitted = fitToField(text, {
+      type: el instanceof HTMLTextAreaElement ? "textarea" : el.type,
+      maxLength: el.maxLength,
+      inputMode: el.inputMode,
+      label: fieldLabel(el),
+    });
+    if (!fitted.ok) {
+      return fail(`${describe(el)}: ${fitted.reason}`,
+        `${capitalise(humanName(el))} needs the value in a different form.`);
+    }
+    const value = fitted.value;
+
     setNativeValue(el, "");
     el.dispatchEvent(new Event("input", { bubbles: true }));
-    setNativeValue(el, text);
+    setNativeValue(el, value);
     el.dispatchEvent(new Event("input", { bubbles: true }));
     el.dispatchEvent(new Event("change", { bubbles: true }));
+
+    // Read it back. A browser drops a value its input type cannot hold, and
+    // a page can refuse one in its input handler - either way the field is
+    // empty, and "typed" would be false.
+    if (value.trim() !== "" && el.value === "") {
+      return fail(
+        `${describe(el)} is still empty - the ${el instanceof HTMLInputElement ? `${el.type} ` : ""}field ` +
+          `did not accept that text. Check the format it expects (its placeholder or label) and try again.`,
+        `${capitalise(humanName(el))} didn't accept that.`,
+      );
+    }
+    if (fitted.note) note = ` It was ${fitted.note}.`;
+    else if (el.value !== value) note = " The page reformatted it as it went in.";
   } else if (el.hasAttribute("contenteditable") || (el as HTMLElement).isContentEditable) {
     // Not `textContent = text`. Rich editors - Slack, Notion, Google Docs, and
     // a fair number of comment boxes - keep their own model of the document
@@ -418,7 +471,7 @@ async function typeInto(el: Element, text: string, submit: boolean): Promise<Act
   // nothing, since it already knows what it asked for and will see the field's
   // (tokenized) value in the next page read.
   return done(
-    `Typed ${text.length} character(s) into ${describe(el)}${submit ? " and pressed Enter" : ""}.`,
+    `Typed ${text.length} character(s) into ${describe(el)}${submit ? " and pressed Enter" : ""}.${note}`,
     // The text itself is deliberately never echoed - see the note above - so
     // the sentence names the field rather than what went into it.
     `Filled in ${humanName(el)}${submit ? " and pressed Enter" : ""}.`,
