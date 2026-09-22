@@ -13,12 +13,16 @@ export class TabController {
    */
   private async send(request: ContentRequest): Promise<ActionResult> {
     try {
-      return await chrome.tabs.sendMessage(this.tabId, request);
-    } catch {
+      return await answered(chrome.tabs.sendMessage(this.tabId, request));
+    } catch (error) {
+      // A page that went silent has the request - it may well have carried
+      // it out. Injecting and sending again would do the click twice.
+      if (error instanceof PageSilentError) throw new PageGoneError(error.message);
       try {
         await this.inject();
-        return await chrome.tabs.sendMessage(this.tabId, request);
+        return await answered(chrome.tabs.sendMessage(this.tabId, request));
       } catch (error) {
+        if (error instanceof PageSilentError) throw new PageGoneError(error.message);
         // Chrome's own wording for a page that went away mid-action is
         // "Frame with ID 0 was removed" / "No tab with id". Left raw it ends
         // the task with a sentence about frames, which tells the planner
@@ -99,6 +103,31 @@ export class TabController {
 
 /** The page we were driving went away - normally because it navigated. */
 export class PageGoneError extends Error {}
+
+class PageSilentError extends Error {}
+
+/**
+ * The longest a page may take to answer one request.
+ *
+ * Nothing the content script does legitimately comes near it - the slowest
+ * action waits four seconds for the page to settle. Without it, a page that
+ * never replied held the run on one step for ever with the panel still saying
+ * "Click ...": a tab frozen by a script, or blocked by an alert() the page
+ * raised in response to the click.
+ */
+const PAGE_ANSWER_MS = 30_000;
+
+function answered<T>(reply: Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const silent = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new PageSilentError(
+      `The page did not respond for ${PAGE_ANSWER_MS / 1000} seconds, so it is not known whether ` +
+        `this action took effect. A browser dialog (alert, confirm, print) may be blocking the page, ` +
+        `or the page is frozen. Read the page before doing anything else.`,
+    )), PAGE_ANSWER_MS);
+  });
+  return Promise.race([reply, silent]).finally(() => clearTimeout(timer));
+}
 
 function describeGone(error: unknown): string {
   const raw = error instanceof Error ? error.message : String(error);

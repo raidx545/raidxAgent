@@ -39,6 +39,30 @@ const QUIET = 120;
 const CEILING = 3000;
 
 /**
+ * The next frame - or, in a tab nobody is looking at, a moment.
+ *
+ * Chrome does not run animation frames for a hidden document at all. The agent
+ * works in a hidden tab whenever the user looks at a different one mid-run -
+ * and every screenshot puts the user's tab back in front afterwards - so a bare
+ * `requestAnimationFrame` there never resolved, the content script never
+ * answered, and the run sat on "Click ..." forever. The timer still fires in a
+ * hidden tab, throttled but alive.
+ */
+export function nextFrame(fallbackMs = 50): Promise<void> {
+  return new Promise<void>((resolve) => {
+    let done = false;
+    const finish = (): void => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = self.setTimeout(finish, fallbackMs);
+    requestAnimationFrame(finish);
+  });
+}
+
+/**
  * Resolves once the page stops changing, or once the ceiling is reached.
  *
  * A page that never quiets down - a clock, a spinner, an animated advert - hits
@@ -63,7 +87,7 @@ export function settle(options: { start?: number; quiet?: number; ceiling?: numb
       observer.disconnect();
       // One frame, so anything the last mutation triggered has been laid out
       // before the caller measures the page.
-      requestAnimationFrame(() => resolve());
+      void nextFrame().then(resolve);
     };
 
     const observer = new MutationObserver(() => {
@@ -90,8 +114,8 @@ export function settle(options: { start?: number; quiet?: number; ceiling?: numb
  * Waits for the page to settle, then for a condition to hold.
  *
  * Used where we know what we are waiting for and can say so - a navigation
- * committing, a dialog appearing. Polls on animation frames, so it costs
- * nothing while the tab is in the background.
+ * committing, a dialog appearing. Polls on animation frames, falling back to
+ * a timer in a background tab, where frames never come.
  */
 export async function settleUntil(
   condition: () => boolean,
@@ -108,7 +132,7 @@ export async function settleUntil(
   while (Date.now() < deadline) {
     await settle({ ceiling: Math.max(0, deadline - Date.now()) });
     if (condition()) return true;
-    await new Promise((resolve) => requestAnimationFrame(resolve));
+    await nextFrame();
   }
 
   return condition();

@@ -245,6 +245,7 @@ async function run(): Promise<void> {
   await textPixelScenario();
   await failedMeasurementScenario();
   await actionScenario();
+  await controlStateScenario();
   await appShellScrollScenario();
   await dialogCaptureScenario();
   await responsivenessScenario();
@@ -606,6 +607,63 @@ async function actionScenario(): Promise<void> {
   check("actions: read_page returns a capture, not a stale flat list",
     reread.ok && !!reread.capture && Array.isArray(reread.capture.root.children),
     reread.detail, true);
+
+  host.remove();
+}
+
+/**
+ * A control's state, seen and respected.
+ *
+ * Dispatched events do not ask permission: a click sent to a disabled button
+ * still reaches its listeners, and the native value setter writes through
+ * `readonly`. And the render printed a ticked box like an unticked one. Both
+ * are checked here against the real capture, render and act.
+ */
+async function controlStateScenario(): Promise<void> {
+  const host = document.createElement("div");
+  host.innerHTML = `
+    <div id="cs-row" role="checkbox" aria-checked="true" aria-label="Select conversation">x</div>
+    <input id="cs-off" type="checkbox" aria-label="Remember me">
+    <div id="cs-tab" role="tab" aria-selected="true">Primary</div>
+    <input id="cs-ro" readonly value="INV-2024-001" aria-label="Invoice number">
+    <button id="cs-dis" disabled>Submit order</button>
+    <div role="button" aria-disabled="true" aria-label="Send"><span id="cs-icon">Send now</span></div>
+    <fieldset disabled><input id="cs-fs" aria-label="Locked"></fieldset>
+  `;
+  document.body.appendChild(host);
+  let fired = 0;
+  host.querySelector("#cs-dis")!.addEventListener("click", () => fired++);
+  host.querySelector("[aria-label=Send]")!.addEventListener("click", () => fired++);
+  await new Promise((r) => setTimeout(r, 150));
+
+  const dom = captureDom();
+  const wire = renderPage(dom);
+  const nodes: { id: number; attrs: Record<string, string> }[] = [];
+  const collect = (x: typeof dom.root): void => { nodes.push(x); x.children.forEach(collect); };
+  collect(dom.root);
+  const idOf = (id: string) => nodes.find((x) => x.attrs.id === id)?.id ?? -1;
+  const line = (id: string) => wire.split("\n").find((l) => l.includes(`[${idOf(id)}] `))?.trim() ?? "";
+
+  check("state: a ticked ARIA checkbox says checked", /\(checked\)/.test(line("cs-row")), line("cs-row"), true);
+  check("state: an unticked native checkbox says unchecked", /unchecked/.test(line("cs-off")), line("cs-off"), true);
+  check("state: the selected tab says selected", /selected/.test(line("cs-tab")), line("cs-tab"), true);
+  check("state: a read-only field says readonly", /readonly/.test(line("cs-ro")), line("cs-ro"), true);
+  check("state: a field in a disabled fieldset says disabled", /disabled/.test(line("cs-fs")), line("cs-fs"), true);
+
+  const typed = await act({ name: "type" as never, input: { element_id: idOf("cs-ro"), text: "TAMPERED" } }, dom.generation);
+  const ro = host.querySelector<HTMLInputElement>("#cs-ro")!;
+  check("state: typing into a read-only field is refused",
+    !typed.ok && ro.value === "INV-2024-001", `${typed.detail} - value is ${JSON.stringify(ro.value)}`, true);
+
+  const clicked = await act({ name: "click" as never, input: { element_id: idOf("cs-dis") } }, dom.generation);
+  const icon = await act({ name: "click" as never, input: { element_id: idOf("cs-icon") } }, dom.generation);
+  check("state: clicking a disabled button is refused, and its handler never fires",
+    !clicked.ok && !icon.ok && fired === 0,
+    `native: ${clicked.ok}, aria (via its icon): ${icon.ok}, handlers fired ${fired} time(s)`, true);
+
+  const fs = await act({ name: "type" as never, input: { element_id: idOf("cs-fs"), text: "x" } }, dom.generation);
+  check("state: typing into a disabled fieldset is refused",
+    !fs.ok && host.querySelector<HTMLInputElement>("#cs-fs")!.value === "", fs.detail, true);
 
   host.remove();
 }

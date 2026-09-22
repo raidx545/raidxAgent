@@ -16,6 +16,8 @@
  *   it there rather than where it was told to go.
  */
 
+import { nextFrame } from "../content/settle";
+
 interface Hidden {
   el: HTMLElement;
   visibility: string;
@@ -92,7 +94,8 @@ export async function scrollTo(
 
   scrollTo_(0, y);
   // Two frames is enough for layout and paint on everything reasonable.
-  await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  await nextFrame();
+  await nextFrame();
   // Lazily-loaded images decode a beat later.
   await new Promise((resolve) => setTimeout(resolve, 120));
 

@@ -119,7 +119,7 @@ export function renderPage(capture: DomCapture): string {
       if (node.attrs.type) hints.push(`type=${node.attrs.type}`);
       if (node.attrs.autocomplete) hints.push(`autocomplete=${node.attrs.autocomplete}`);
       if (node.attrs.hrefHost) hints.push(`href=${node.attrs.hrefHost}`);
-      if (node.attrs.disabled) hints.push("disabled");
+      hints.push(...stateOf(node));
       if (!node.visible) hints.push("offscreen");
       if (hints.length > 0) parts.push(`(${hints.join(" ")})`);
 
@@ -260,4 +260,35 @@ export function alignable(value: string): boolean {
 
 function escapeRegex(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * The state of a control, in words the planner can act on.
+ *
+ * Native state and its ARIA equivalent are folded together, because a page
+ * uses whichever its framework produces and the planner should not have to
+ * know which. An attribute that says "false" is stated too, where the opposite
+ * is meaningful: "unchecked" and "collapsed" answer a question that silence
+ * does not.
+ */
+export function stateOf(node: CapturedNode): string[] {
+  const a = node.attrs;
+  const out: string[] = [];
+
+  const checked = a.checked ?? a["aria-checked"];
+  if (checked === "true") out.push("checked");
+  else if (checked === "false") out.push("unchecked");
+  else if (checked === "mixed") out.push("partly-checked");
+
+  if (a["aria-selected"] === "true") out.push("selected");
+  if (a["aria-pressed"] === "true") out.push("pressed");
+  else if (a["aria-pressed"] === "false") out.push("not-pressed");
+  if (a["aria-expanded"] === "true") out.push("expanded");
+  else if (a["aria-expanded"] === "false") out.push("collapsed");
+
+  if (a.disabled === "true" || a["aria-disabled"] === "true") out.push("disabled");
+  if (a.readonly === "true" || a["aria-readonly"] === "true") out.push("readonly");
+  if (a.required === "true" || a["aria-required"] === "true") out.push("required");
+  if (a["aria-invalid"] && a["aria-invalid"] !== "false") out.push("invalid");
+  return out;
 }

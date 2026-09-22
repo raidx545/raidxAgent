@@ -177,6 +177,14 @@ empty line, so searching for the word on screen finds nothing while the field
 sits right there in the element list. \`find_text\` searches labels and
 placeholders as well as visible text, and returns ids you can act on.
 
+The brackets after an element give its state: \`checked\` / \`unchecked\`,
+\`selected\`, \`pressed\`, \`expanded\` / \`collapsed\`, \`disabled\`,
+\`readonly\`, \`required\`, \`invalid\`. Check the state before toggling -
+clicking a checkbox that is already \`checked\` unticks it. A \`disabled\`
+control does nothing when clicked and a \`readonly\` field cannot be typed into;
+something else has to happen first, usually a required field or a checkbox
+further up the form.
+
 When a dialog is open, the page render says so and lists it first. Work inside
 it. The page behind it is not what the user is looking at.
 

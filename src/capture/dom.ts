@@ -49,6 +49,17 @@ const KEPT_ATTRS = [
   "aria-haspopup",
   "aria-hidden",
   "open",
+  // The state of a control, which the planner cannot see any other way. Without
+  // these, a ticked checkbox, the selected tab and a pressed Bold button all
+  // rendered exactly like their opposites, so "make sure X is ticked" was a
+  // coin toss and a click meant to set a toggle could just as easily clear it.
+  "aria-checked",
+  "aria-selected",
+  "aria-pressed",
+  "aria-disabled",
+  "aria-readonly",
+  "aria-required",
+  "aria-invalid",
 ];
 
 const MEDIA_TAGS = new Set(["img", "canvas", "svg", "video", "picture", "object", "embed"]);
@@ -241,7 +252,10 @@ function valueOf(el: Element): string | undefined {
     // A password's contents are never captured, not even to be tokenized —
     // the fact that the field exists is the finding.
     if (el.type === "password") return undefined;
-    if (el.type === "checkbox" || el.type === "radio") return el.checked ? "checked" : undefined;
+    // A checkbox's state is recorded in attrs, where "unchecked" can be said
+    // too - as a value, an unticked box was indistinguishable from one whose
+    // state had not been captured at all.
+    if (el.type === "checkbox" || el.type === "radio") return undefined;
     return collapse(el.value, 300) || undefined;
   }
   if (el instanceof HTMLTextAreaElement) return collapse(el.value, 600) || undefined;
@@ -301,8 +315,21 @@ function attrsOf(el: Element): Record<string, string> {
     attrs.filled = String(el.value.length > 0);
   }
 
-  if ((el as HTMLElement & { disabled?: boolean }).disabled) attrs.disabled = "true";
-  if (el instanceof HTMLInputElement && el.readOnly) attrs.readonly = "true";
+  if (el instanceof HTMLInputElement && (el.type === "checkbox" || el.type === "radio")) {
+    attrs.checked = el.indeterminate ? "mixed" : String(el.checked);
+  }
+  // `matches(":disabled")` rather than the property: a control inside a
+  // disabled <fieldset> is disabled without its own flag being set.
+  if ((el as HTMLElement & { disabled?: boolean }).disabled || el.matches(":disabled")) {
+    attrs.disabled = "true";
+  }
+  if ((el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) && el.readOnly) {
+    attrs.readonly = "true";
+  }
+  if ((el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement ||
+       el instanceof HTMLSelectElement) && el.required) {
+    attrs.required = "true";
+  }
 
   return attrs;
 }

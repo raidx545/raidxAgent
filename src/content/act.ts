@@ -105,6 +105,10 @@ function humanName(el: Element): string {
   return kind ? `a ${kind}` : "that element";
 }
 
+function capitalise(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
 function resolve(input: Record<string, unknown>, generation?: number): Element | string {
   const id = input.element_id;
   if (typeof id !== "number") return "element_id must be a number";
@@ -119,6 +123,44 @@ function resolve(input: Record<string, unknown>, generation?: number): Element |
     return `No element ${id} on the current page. The page changed since the last read — call read_page and use the new ids.`;
   }
   return el;
+}
+
+const INTERACTIVE =
+  "button, a[href], input, select, textarea, option, summary, [role=button], [role=link], " +
+  "[role=menuitem], [role=menuitemcheckbox], [role=menuitemradio], [role=tab], [role=option], " +
+  "[role=checkbox], [role=radio], [role=switch], [role=textbox], [role=combobox], [role=treeitem]";
+
+/**
+ * Whether a person could operate this control at all.
+ *
+ * The page is driven by dispatched events, and a dispatched event does not ask
+ * permission: a `click` sent to a disabled button still reaches its listeners,
+ * and the native value setter writes straight through `readonly`. So the agent
+ * could press a Submit the page had deliberately greyed out, or overwrite an
+ * invoice number the page had locked, and report both as done. A user can do
+ * neither, and neither may the agent.
+ *
+ * The check walks up to the control the element belongs to, because the id the
+ * planner holds is often a label or icon inside the button rather than the
+ * button itself.
+ */
+function disabledControl(el: Element): Element | null {
+  const control = el.closest(INTERACTIVE) ?? el;
+  const native = el.closest("button, input, select, textarea, option, optgroup");
+  if (native?.matches(":disabled")) return native;
+  if (el.getAttribute("aria-disabled") === "true") return el;
+  if (control.getAttribute("aria-disabled") === "true") return control;
+  return null;
+}
+
+function unwritable(el: Element): string | null {
+  const locked = disabledControl(el);
+  if (locked) return "disabled";
+  if ((el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) && el.readOnly) {
+    return "read-only";
+  }
+  if (el.getAttribute("aria-readonly") === "true") return "read-only";
+  return null;
 }
 
 async function bringIntoView(el: Element): Promise<void> {
@@ -205,7 +247,7 @@ async function typeInto(el: Element, text: string, submit: boolean): Promise<Act
     }
   } else {
     return fail(`${describe(el)} is not a text field.`,
-      `${humanName(el)} is not something you can type into.`);
+      `${capitalise(humanName(el))} is not something you can type into.`);
   }
 
   if (submit) {
@@ -312,6 +354,15 @@ export async function act(action: AgentAction, generation?: number): Promise<Act
       case "click": {
         const el = resolve(input, generation);
         if (typeof el === "string") return fail(el);
+        const locked = disabledControl(el);
+        if (locked) {
+          return fail(
+            `${describe(locked)} is disabled - clicking it does nothing for a real user, so it was not clicked. ` +
+              `Something else on the page has to be done first: usually a required field, a checkbox, ` +
+              `or a choice further up. Read the page to find it.`,
+            `${capitalise(humanName(locked))} is greyed out, so it can't be pressed yet.`,
+          );
+        }
         await bringIntoView(el);
         const before = document.documentElement.childElementCount;
         const dialogsBefore = openDialogs();
@@ -342,6 +393,16 @@ export async function act(action: AgentAction, generation?: number): Promise<Act
         const el = resolve(input, generation);
         if (typeof el === "string") return fail(el);
         const text = typeof input.text === "string" ? input.text : "";
+        const why = unwritable(el);
+        if (why) {
+          return fail(
+            `${describe(el)} is ${why} - nothing was typed. ` +
+              (why === "read-only"
+                ? `A read-only field is usually filled by the page itself, or by a picker that opens when it is clicked.`
+                : `Something else on the page has to be done first before this field accepts input.`),
+            `${capitalise(humanName(el))} can't be edited${why === "disabled" ? " yet" : ""}.`,
+          );
+        }
         return await typeInto(el, text, input.submit === true);
       }
 
@@ -350,7 +411,11 @@ export async function act(action: AgentAction, generation?: number): Promise<Act
         if (typeof el === "string") return fail(el);
         if (!(el instanceof HTMLSelectElement)) {
           return fail(`${describe(el)} is not a <select>.`,
-            `${humanName(el)} is not a dropdown.`);
+            `${capitalise(humanName(el))} is not a dropdown.`);
+        }
+        if (el.matches(":disabled")) {
+          return fail(`${describe(el)} is disabled - nothing was selected.`,
+            `${capitalise(humanName(el))} is greyed out, so it can't be changed yet.`);
         }
         const wanted = String(input.option ?? "");
         const match = Array.from(el.options).find(
@@ -366,6 +431,10 @@ export async function act(action: AgentAction, generation?: number): Promise<Act
             .join(", ");
           return fail(`No option ${JSON.stringify(wanted)}. Available: ${available}`,
             `No option called "${wanted}" in that dropdown.`);
+        }
+        if (match.disabled || match.parentElement?.matches("optgroup:disabled")) {
+          return fail(`The option ${JSON.stringify(match.textContent?.trim())} is disabled - it cannot be chosen.`,
+            `"${match.textContent?.trim()}" isn't available in that dropdown.`);
         }
         el.value = match.value;
         el.dispatchEvent(new Event("change", { bubbles: true }));
