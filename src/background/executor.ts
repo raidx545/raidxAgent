@@ -2,6 +2,7 @@ import type { ActionResult, AgentAction, ContentRequest } from "../shared/types"
 import type { DomCapture } from "../capture/types";
 import type { SpanRectRequest, SpanRectResult } from "../capture/spans";
 import { PAGE_ACTIONS } from "./tools";
+import { normaliseUrl } from "./url";
 
 /** Tracks which tab the agent is currently driving. */
 export class TabController {
@@ -38,6 +39,29 @@ export class TabController {
       target: { tabId: this.tabId },
       files: ["content.js"],
     });
+  }
+
+  /**
+   * Why this tab cannot be read, or undefined if it can.
+   *
+   * A navigation to a mistyped domain, or a site that is down, "succeeds" -
+   * the tab loads Chrome's error page, which no extension may script. It was
+   * reported as "Navigated to ..." and the capture that followed failed.
+   */
+  async unreadable(): Promise<string | undefined> {
+    const tab = await chrome.tabs.get(this.tabId).catch(() => null);
+    if (!tab) return "the tab was closed";
+    if (isRestricted(tab.url)) return `the tab shows ${tab.url}, a browser page that extensions cannot read`;
+    try {
+      await chrome.scripting.executeScript({ target: { tabId: this.tabId }, func: () => true });
+      return undefined;
+    } catch (error) {
+      const raw = error instanceof Error ? error.message : String(error);
+      if (/error page/i.test(raw)) {
+        return "the site could not be reached - Chrome is showing its own error page (the address may be wrong, or the site is down)";
+      }
+      return `the page cannot be read: ${raw}`;
+    }
   }
 
   /** Resolves once the tab has finished loading, or after a timeout. */
@@ -131,6 +155,9 @@ function answered<T>(reply: Promise<T>): Promise<T> {
 
 function describeGone(error: unknown): string {
   const raw = error instanceof Error ? error.message : String(error);
+  if (/error page/i.test(raw)) {
+    return "The tab is showing Chrome's error page - the site could not be reached - so there is nothing to act on. Navigate somewhere else.";
+  }
   if (/frame with id|no tab with id|receiving end does not exist|message port closed/i.test(raw)) {
     return "The page navigated or closed while this action was running, so it could not be completed. Read the page again and continue from what is there now.";
   }
@@ -159,10 +186,30 @@ function hostOf(url: string): string {
   }
 }
 
-function normaliseUrl(raw: string): string {
-  if (/^https?:\/\//i.test(raw)) return raw;
-  if (/^[\w-]+(\.[\w-]+)+/.test(raw)) return `https://${raw}`;
-  return `https://www.google.com/search?q=${encodeURIComponent(raw)}`;
+
+/**
+ * What a navigation actually led to.
+ *
+ * Where the tab ended up is reported, not where it was sent: a sign-in wall or
+ * a regional redirect is the first thing the planner needs to know about, and
+ * "Navigated to X" said the opposite.
+ */
+async function arrived(controller: TabController, url: string, verb: string): Promise<ActionResult> {
+  const problem = await controller.unreadable();
+  if (problem) {
+    return {
+      ok: false,
+      detail: `Could not open ${url}: ${problem}. Check the address, or search for the site instead.`,
+      summary: `Couldn't open ${hostOf(url)}.`,
+    };
+  }
+  const landed = (await chrome.tabs.get(controller.tabId).catch(() => null))?.url ?? url;
+  const moved = hostOf(landed) !== hostOf(url);
+  return {
+    ok: true,
+    detail: moved ? `${verb} ${url} - it redirected to ${landed}.` : `${verb} ${landed}.`,
+    summary: `Opened ${hostOf(moved ? landed : url)}.`,
+  };
 }
 
 /**
@@ -219,10 +266,7 @@ export async function execute(
       }
       await chrome.tabs.update(controller.tabId, { url });
       await controller.waitForLoad();
-      return {
-        result: { ok: true, detail: `Navigated to ${url}.`, summary: `Opened ${hostOf(url)}.` },
-        controller,
-      };
+      return { result: await arrived(controller, url, "Navigated to"), controller };
     }
 
     case "go_back": {
@@ -250,14 +294,9 @@ export async function execute(
       const tab = await chrome.tabs.create({ url, active: true });
       const next = new TabController(tab.id!);
       await next.waitForLoad();
-      return {
-        result: {
-          ok: true,
-          detail: `Opened ${url} in new tab ${tab.id}. Agent focus moved there.`,
-          summary: `Opened ${hostOf(url)} in a new tab.`,
-        },
-        controller: next,
-      };
+      const result = await arrived(next, url, `Opened in new tab ${tab.id} (agent focus moved there):`);
+      if (result.ok) result.summary = `Opened ${hostOf(url)} in a new tab.`;
+      return { result, controller: next };
     }
 
     case "list_tabs": {

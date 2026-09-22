@@ -4,7 +4,8 @@ import { walkCapture } from "../capture/dom";
 import { alignTask, pageBlock, pruneStalePages, renderPage } from "./wire";
 import { SYSTEM_PROMPT, taskPrompt } from "./prompt";
 import { TOOLS, PAGE_ACTIONS } from "./tools";
-import { TabController, execute, isRestricted } from "./executor";
+import { TabController, execute } from "./executor";
+import { resolveUrlTokens } from "./url";
 import { captureTab } from "./inspect";
 import { detectInjection, gate } from "./safety";
 import { createPlanner } from "./providers";
@@ -130,18 +131,6 @@ export async function runTask(
   let controller = new TabController(startTabId);
   const tab = await chrome.tabs.get(startTabId);
 
-  if (isRestricted(tab.url)) {
-    emit({
-      kind: "entry",
-      entry: {
-        id: nextId(),
-        role: "error",
-        text: `I can't work on ${tab.url} — Chrome blocks extensions on its own pages. Open a normal website and try again.`,
-      },
-    });
-    return;
-  }
-
   emit({
     kind: "entry",
     entry: {
@@ -184,10 +173,33 @@ export async function runTask(
   let lastPageSignature = "";
   let current: SanitizedCapture | undefined;
 
+  /**
+   * Why the tab cannot be read right now, when it exists but has no page the
+   * agent may script: a New Tab page, Chrome's error page after a mistyped
+   * address, a chrome:// page.
+   *
+   * These used to end the run. Starting a task from a New Tab page - the most
+   * natural place to say "write a mail" - was refused outright, and one
+   * navigation to a site that was down stopped everything. None of them needs
+   * a page to recover from: navigate, open_tab and go_back work on the tab.
+   */
+  let unreadable: string | undefined;
+
   const perceive = async (): Promise<SanitizedCapture | undefined> => {
-    // The tab can be closed, navigated to a browser page, or crash while a
-    // task is running. Each of those threw an unhandled error mid-loop before;
-    // they are ordinary events and should end the task with a sentence.
+    unreadable = undefined;
+    const problem = await controller.unreadable();
+    if (problem && problem !== "the tab was closed") {
+      unreadable = problem;
+      current = undefined;
+      // No page, so no ids: any id the planner still holds is from a page
+      // that is gone.
+      issuedIds = new Set();
+      return undefined;
+    }
+
+    // The tab can be closed or crash while a task is running. Each of those
+    // threw an unhandled error mid-loop before; they are ordinary events and
+    // should end the task with a sentence.
     let raw;
     try {
       raw = await captureTab(controller.tabId, {
@@ -230,7 +242,7 @@ export async function runTask(
   };
 
   const first = await perceive();
-  if (!first) {
+  if (!first && !unreadable) {
     emit({
       kind: "entry",
       entry: { id: nextId(), role: "error", text: "The page did not respond to the capture." },
@@ -238,7 +250,7 @@ export async function runTask(
     return;
   }
 
-  reportSanitization(first, emit);
+  if (first) reportSanitization(first, emit);
 
   // The task is tokenized in the same vault as the page.
   //
@@ -286,7 +298,10 @@ export async function runTask(
     {
       role: "user",
       content:
-        taskPrompt(tokenizedTask, first.dom.url, first.dom.title, history) + pageBlock(first.dom),
+        first
+          ? taskPrompt(tokenizedTask, first.dom.url, first.dom.title, history) + pageBlock(first.dom)
+          : taskPrompt(tokenizedTask, await sanitizeDetail(tab.url ?? "", vault), tab.title ?? "", history) +
+            await noPageBlock(unreadable ?? "", vault),
     },
   ];
 
@@ -669,6 +684,8 @@ export async function runTask(
       if (fresh) {
         last.content +=
           (fresh.dom.url !== before ? "\n\nThe page navigated." : "") + pageBlock(fresh.dom);
+      } else if (unreadable) {
+        last.content += await noPageBlock(unreadable, vault);
       } else {
         // No page means no ids, so the next turn could only guess. Stop.
         last.content += "\n\nThe page could not be read after this action, so the task cannot continue.";
@@ -690,6 +707,17 @@ export async function runTask(
     },
   });
   return undefined;
+}
+
+/**
+ * Stands in for the page block when the tab has no page the agent may read.
+ * The reason can carry the URL the planner asked for, so it is sanitized like
+ * any other text bound for the model.
+ */
+async function noPageBlock(reason: string, vault: RemoteVault): Promise<string> {
+  return `\n\nNo readable page: ${await sanitizeDetail(reason, vault)}. There are no element ids. ` +
+    `Use navigate or open_tab to go to a normal website, or go_back; actions on the page will ` +
+    `fail until then.`;
 }
 
 /**
@@ -736,7 +764,11 @@ async function resolveInputs(
       continue;
     }
     const result = await vault.resolve(value);
-    out[key] = result.text;
+    // Only navigate and open_tab take a url, and a value going into one must
+    // be encoded for its place in it - see resolveUrlTokens.
+    out[key] = key === "url"
+      ? await resolveUrlTokens(value, async (token) => (await vault.resolve(token)).text)
+      : result.text;
     unknown.push(...result.unknown);
     sealed.push(...result.sealed);
   }
