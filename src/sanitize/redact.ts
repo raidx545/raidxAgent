@@ -34,7 +34,18 @@ export interface RedactReport {
   regionsBurned: number;
   /** Text spans painted over with their token. */
   textSpansCovered: number;
-  /** Text findings whose position on screen could not be resolved. */
+  /**
+   * Of those covered, how many had to fall back to their node's whole box
+   * because the page could not measure the span itself. Over-covered, never
+   * under-covered.
+   */
+  textSpansCoveredByElement: number;
+  /** Tokenized text lying outside the image - nothing there to cover. */
+  textSpansOffImage: number;
+  /**
+   * Text findings that could not be placed at all - no measurement and no
+   * usable box. Should always be zero; anything else is a leak path.
+   */
   textSpansUnresolved: number;
   /** Regions of text read out of the pixels by OCR and painted over with their token. */
   ocrSpansCovered: number;
@@ -164,6 +175,8 @@ export async function redactScreenshot(
   const report: RedactReport = {
     regionsBurned: 0,
     textSpansCovered: 0,
+    textSpansCoveredByElement: 0,
+    textSpansOffImage: 0,
     textSpansUnresolved: 0,
     ocrSpansCovered: 0,
     regionsOutsideViewport: 0,
@@ -292,18 +305,45 @@ export async function redactScreenshot(
       const token = tokensByFinding.get(finding.id);
       if (!token) continue;
 
-      const resolved = rectsByFinding.get(finding.id);
-      if (!resolved || resolved.rects.length === 0) {
+      let rects = rectsByFinding.get(finding.id)?.rects ?? [];
+      let byElement = false;
+
+      // The page could not say where this span is painted - the node was
+      // replaced by React or a virtual list, or the message to the tab failed.
+      // This used to skip the span, which left the value in plain pixels and
+      // sent the screenshot anyway; one failed message and every tokenized
+      // value on the page went out unredacted. The node's box was captured
+      // alongside the tree the screenshot was checked against, so cover all of
+      // it instead: over-covering is the safe direction.
+      if (rects.length === 0) {
+        const [x, y, w, h] = finding.bbox;
+        if (w > 0 && h > 0) {
+          // Captured boxes are viewport-relative; coverText wants document ones.
+          rects = [[x + viewport.scrollX, y + viewport.scrollY, w, h]];
+          byElement = true;
+        }
+      }
+
+      if (rects.length === 0) {
+        // No measurement and no usable box: a node with no size paints nothing.
         report.textSpansUnresolved++;
         continue;
       }
 
       let covered = false;
-      for (const rect of resolved.rects) {
+      for (const rect of rects) {
         if (coverText(ctx, rect, token, shot, canvas, report)) covered = true;
       }
-      if (covered) report.textSpansCovered++;
-      else report.textSpansUnresolved++;
+
+      // Kept apart from "unresolved" on purpose. Text outside the image is not
+      // in the picture and needs no cover; counting it with genuine failures
+      // made the one number that should be watched meaningless.
+      if (covered) {
+        report.textSpansCovered++;
+        if (byElement) report.textSpansCoveredByElement++;
+      } else {
+        report.textSpansOffImage++;
+      }
     }
 
     const out = await canvasToDataUrl(canvas);

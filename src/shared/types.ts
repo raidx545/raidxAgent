@@ -109,7 +109,11 @@ export interface ActionResult {
 
 /** Messages the content script accepts. */
 export type ContentRequest =
-  | { kind: "act"; action: AgentAction }
+  /**
+   * `generation` is the capture the action's element ids were read from. The
+   * page refuses the action if its registry has been rebuilt since.
+   */
+  | { kind: "act"; action: AgentAction; generation?: number }
   | { kind: "capture" }
   /** Wait for the DOM to stop changing, so a fresh page is measured once it has settled. */
   | { kind: "settle" }

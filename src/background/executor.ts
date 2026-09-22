@@ -92,8 +92,8 @@ export class TabController {
     return result?.capture;
   }
 
-  async act(action: AgentAction): Promise<ActionResult> {
-    return this.send({ kind: "act", action });
+  async act(action: AgentAction, generation?: number): Promise<ActionResult> {
+    return this.send({ kind: "act", action, generation });
   }
 }
 
@@ -144,6 +144,8 @@ function normaliseUrl(raw: string): string {
 export async function execute(
   controller: TabController,
   action: AgentAction,
+  /** The capture the action's element ids came from; see DomCapture.generation. */
+  generation?: number,
 ): Promise<{ result: ActionResult; controller: TabController }> {
   const { name, input } = action;
 
@@ -161,7 +163,7 @@ export async function execute(
       };
     }
     try {
-      return { result: await controller.act(action), controller };
+      return { result: await controller.act(action, generation), controller };
     } catch (error) {
       // A lost page is a tool result, not the end of the run.
       if (error instanceof PageGoneError) {

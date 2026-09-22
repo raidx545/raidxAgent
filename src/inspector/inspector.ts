@@ -162,6 +162,9 @@ async function drawShot(): Promise<void> {
       );
     }
     parts.push(`${r.textSpansCovered} text span(s) painted over with their token`);
+    if (r.textSpansCoveredByElement > 0) {
+      parts.push(`${r.textSpansCoveredByElement} text span(s) covered by their whole element (could not be measured exactly)`);
+    }
     if (r.textSpansUnresolved > 0) {
       parts.push(`${r.textSpansUnresolved} text span(s) could not be located on screen`);
     }

@@ -628,7 +628,14 @@ export async function runTask(
         continue;
       }
 
-      const outcome = await execute(controller, { name: call.name as never, input: resolved.input });
+      // The ids the planner used came from `current`; the page refuses them if
+      // it has been captured again since, rather than resolving them against a
+      // registry that now maps each number to a different element.
+      const outcome = await execute(
+        controller,
+        { name: call.name as never, input: resolved.input },
+        current?.dom.generation,
+      );
       controller = outcome.controller;
       const { result } = outcome;
 

@@ -457,13 +457,29 @@ function assignIds(node: CapturedNode, next: { value: number }): number {
  */
 let lastTree: DomCapture | undefined;
 
+/** Bumped by every capture; see DomCapture.generation. */
+let generation = 0;
+
+/** The generation whose registry is live right now. */
+export function liveGeneration(): number {
+  return generation;
+}
+
 /** The most recent capture, for searching without reassigning ids. */
 export function lastCapture(): DomCapture | undefined {
   return lastTree;
 }
 
-/** The live element behind a captured node, if it is still on the page. */
-export function capturedElement(id: number): Element | undefined {
+/**
+ * The live element behind a captured node, if it is still on the page.
+ *
+ * Pass the generation the id came from. When it is not the live one, the id
+ * was issued against a registry that has since been rebuilt - and resolving it
+ * anyway is how "Archive" became "Delete forever" when a toast dismissed itself
+ * between two captures. Nothing is returned rather than the wrong thing.
+ */
+export function capturedElement(id: number, from?: number): Element | undefined {
+  if (from !== undefined && from !== generation) return undefined;
   const el = registry[id];
   return el?.isConnected ? el : undefined;
 }
@@ -475,6 +491,7 @@ export function captureDom(): DomCapture {
   examined = 0;
   pruned = 0;
   registry = [];
+  generation++;
   pending = new WeakMap();
 
   const children = walk(document.body);
@@ -496,6 +513,7 @@ export function captureDom(): DomCapture {
   const kept = assignIds(root, { value: 0 });
 
   const capture: DomCapture = {
+    generation,
     url: location.href,
     origin: location.origin,
     title: document.title,

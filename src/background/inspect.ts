@@ -107,7 +107,14 @@ export async function captureTab(
 
       const after = await controller.captureDom();
       if (!after) return { dom, screenshot };
-      if (isConsistent(dom, after)) return { dom, screenshot };
+      // Return `after`, never `dom`. The second capture rebuilt the page's
+      // id-to-element registry, so it is the only tree whose ids still name the
+      // elements they claim to. Returning the first one handed the planner ids
+      // that the page now resolved to different elements - on a live page, a
+      // toast dismissing itself between the two captures turned a click on
+      // "Archive" into a click on "Delete forever", and the safety gate, judging
+      // the first tree, approved it.
+      if (isConsistent(dom, after)) return { dom: after, screenshot };
 
       if (attempt === MAX_ATTEMPTS) {
         // Fail closed. A screenshot we cannot align with the tree is worse than
@@ -218,12 +225,37 @@ async function grabViewport(
   return { error: "captureVisibleTab returned nothing." };
 }
 
-function isConsistent(before: DomCapture, after: DomCapture): boolean {
+/**
+ * Did the page hold still across the screenshot?
+ *
+ * Scroll and viewport alone are not enough: the DOM can change without the page
+ * moving - a row arrives, a toast mounts or dismisses - and then the screenshot,
+ * taken between the two captures, may show a layout neither tree describes, so
+ * redaction would burn the wrong rectangles. The two trees must also have the
+ * same shape: the same elements, in the same order, under the same ids.
+ *
+ * Text content is deliberately not compared. A clock ticking or a counter
+ * updating changes text without moving any element or shifting any id, and
+ * refusing every screenshot on such a page would cost far more than it saves.
+ */
+export function isConsistent(before: DomCapture, after: DomCapture): boolean {
   return (
     before.url === after.url &&
     before.viewport.scrollX === after.viewport.scrollX &&
     before.viewport.scrollY === after.viewport.scrollY &&
     before.viewport.width === after.viewport.width &&
-    before.viewport.height === after.viewport.height
+    before.viewport.height === after.viewport.height &&
+    shape(before.root) === shape(after.root)
   );
+}
+
+/** Tag, role and id of every node, in order - the part ids and layout depend on. */
+function shape(root: DomCapture["root"]): string {
+  const out: string[] = [];
+  const visit = (node: DomCapture["root"]): void => {
+    out.push(`${node.id}:${node.tag}:${node.role}:${node.children.length}`);
+    node.children.forEach(visit);
+  };
+  visit(root);
+  return out.join("|");
 }

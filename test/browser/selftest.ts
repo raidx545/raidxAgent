@@ -243,6 +243,7 @@ async function run(): Promise<void> {
 
   await fullPageScenario();
   await textPixelScenario();
+  await failedMeasurementScenario();
   await actionScenario();
   await appShellScrollScenario();
   await dialogCaptureScenario();
@@ -1303,6 +1304,86 @@ async function transcriptScenario(): Promise<void> {
 
   host.remove();
   style.remove();
+}
+
+/**
+ * When the page cannot say where a span is painted.
+ *
+ * Covering tokenized text in the screenshot depends on the page measuring each
+ * span. That measurement fails routinely: React or a virtual list replaces the
+ * node between capture and measurement, or the message to the tab fails - and
+ * sanitize.ts turns a failed call into an empty list. The redactor used to
+ * count those spans as "unresolved" and skip them, so the value stayed in plain
+ * pixels and the screenshot went to the model anyway. One failed message and
+ * every tokenized value on the page shipped unredacted.
+ *
+ * The node's captured box is always known, so a span that cannot be measured is
+ * covered at element granularity instead: over-covering, the safe direction.
+ */
+async function failedMeasurementScenario(): Promise<void> {
+  const dpr = devicePixelRatio || 1;
+  const MARKER = "#ff00ff";
+
+  const host = document.createElement("div");
+  host.style.cssText = "font:16px/1.8 monospace; padding:20px";
+  host.innerHTML = `
+    <p id="fm-1">Contact priya.sharma@example.in about the invoice.</p>
+    <p id="fm-2">Call +91 98765 43210 today.</p>`;
+  document.body.appendChild(host);
+  await new Promise((r) => setTimeout(r, 200));
+
+  const dom = captureDom();
+  const found = await detect(dom);
+  const textFindings = found.findings.filter(
+    (f) => f.shape === "text" && f.action !== "none" && f.action !== "burn-region" && f.span,
+  );
+  // Where the text really is - used only to paint the marker, never given to
+  // the redactor, which is exactly the failure being modelled.
+  const truth = spanRects(textFindings.map((f) => ({
+    findingId: f.id, nodeId: f.nodeId, field: f.field ?? "text", start: f.span?.[0], end: f.span?.[1],
+  })));
+
+  const pageHeight = Math.max(document.documentElement.scrollHeight, VIEW_H());
+  const canvas = new OffscreenCanvas(Math.round(VIEW_W() * dpr), Math.round(pageHeight * dpr));
+  const ctx = canvas.getContext("2d")!;
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = MARKER;
+  for (const entry of truth) for (const [x, y, w, h] of entry.rects) {
+    ctx.fillRect(x * dpr, y * dpr, w * dpr, h * dpr);
+  }
+  const blob = await canvas.convertToBlob({ type: "image/png" });
+  const dataUrl = await new Promise<string>((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.readAsDataURL(blob);
+  });
+  const shot: ScreenshotMeta = {
+    dataUrl, kind: "page", scale: dpr, originX: 0, originY: 0,
+    cssWidth: VIEW_W(), cssHeight: pageHeight, tiles: 1,
+  };
+  const before = await countColours(dataUrl);
+
+  // Two ways the measurement fails in real use.
+  for (const [label, resolver] of [
+    ["returns nothing", async () => []],
+    ["throws", async () => { throw new Error("Could not establish connection"); }],
+  ] as const) {
+    const outcome = await sanitize({ dom, screenshot: shot }, new Vault(), undefined,
+      resolver as never);
+    if (!outcome.screenshot) {
+      check(`failed measurement (${label}): no screenshot was sent`, true,
+        "withheld - safe", true);
+      continue;
+    }
+    const after = await countColours(outcome.screenshot.dataUrl);
+    check(`failed measurement (${label}): no PII pixel survives`,
+      after.face === 0,
+      `${before.face} -> ${after.face} marker pixels` +
+        (after.face > 0 ? " - the values went to the model in plain sight" : ""), true);
+  }
+
+  host.remove();
 }
 
 /**

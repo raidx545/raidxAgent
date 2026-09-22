@@ -52,7 +52,7 @@ chrome.runtime.onMessage.addListener(
 
       case "act":
         // Async work requires keeping the message channel open (return true).
-        act(request.action).then(sendResponse);
+        act(request.action, request.generation).then(sendResponse);
         return true;
 
       default:

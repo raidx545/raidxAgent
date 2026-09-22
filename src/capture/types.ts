@@ -51,6 +51,21 @@ export interface Viewport {
 }
 
 export interface DomCapture {
+  /**
+   * Which capture this is, counting up from page load.
+   *
+   * Element ids are only meaningful against the registry of the capture that
+   * issued them, and every capture rebuilds that registry from scratch. On a
+   * live page the DOM shifts between captures - a mail arrives, a toast
+   * dismisses itself - so the same id names a different element each time. An
+   * action carries the generation its ids came from, and the page refuses it
+   * if that is no longer the live one: a stale id must fail, never land on
+   * whatever happens to hold that number now.
+   *
+   * Absent on captures that never came from a page (payload and request
+   * wrappers, test fixtures).
+   */
+  generation?: number;
   url: string;
   /** Origin only. The path can itself carry identifiers. */
   origin: string;

@@ -26,6 +26,13 @@ export interface SpanRectRequest {
   /** Character range within that field. Absent means the whole element. */
   start?: number;
   end?: number;
+  /**
+   * The capture `nodeId` came from. Measuring against a rebuilt registry does
+   * not fail - it measures a *different* element, paints over the wrong text,
+   * and reports the span as covered while the real value stays visible. A
+   * mismatch returns nothing instead, which the redactor handles safely.
+   */
+  generation?: number;
 }
 
 export interface SpanRectResult {
@@ -63,7 +70,7 @@ function elementRect(el: Element): Rect[] {
  * direction when the alternative is leaving PII visible.
  */
 function measure(request: SpanRectRequest): SpanRectResult {
-  const el = capturedElement(request.nodeId);
+  const el = capturedElement(request.nodeId, request.generation);
   if (!el) return { findingId: request.findingId, rects: [], precision: "missing" };
 
   const wholeElement = (): SpanRectResult => ({

@@ -141,6 +141,7 @@ export async function sanitize(
         field: f.field ?? "text",
         start: f.span?.[0],
         end: f.span?.[1],
+        generation: capture.dom.generation,
       }));
 
     const [ocrOutcome, rects] = await Promise.all([
@@ -209,6 +210,8 @@ export async function sanitize(
   let redact: RedactReport = {
     regionsBurned: 0,
     textSpansCovered: 0,
+    textSpansCoveredByElement: 0,
+    textSpansOffImage: 0,
     textSpansUnresolved: 0,
     ocrSpansCovered: 0,
     regionsOutsideViewport: 0,

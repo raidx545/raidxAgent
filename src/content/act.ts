@@ -1,5 +1,5 @@
 import type { ActionResult, AgentAction } from "../shared/types";
-import { capturedElement, captureDom, lastCapture, walkCapture } from "../capture/dom";
+import { capturedElement, captureDom, lastCapture, liveGeneration, walkCapture } from "../capture/dom";
 import { scrollByPixels } from "../capture/scroller";
 import { CLICK_START, settle } from "./settle";
 
@@ -105,10 +105,16 @@ function humanName(el: Element): string {
   return kind ? `a ${kind}` : "that element";
 }
 
-function resolve(input: Record<string, unknown>): Element | string {
+function resolve(input: Record<string, unknown>, generation?: number): Element | string {
   const id = input.element_id;
   if (typeof id !== "number") return "element_id must be a number";
-  const el = capturedElement(id);
+  if (generation !== undefined && generation !== liveGeneration()) {
+    // The ids were read from a capture whose registry has since been rebuilt.
+    // Resolving this one anyway would hit whatever holds that number now.
+    return `Element ids from that page read are no longer valid - the page was read again since. ` +
+      `Call read_page and use the new ids.`;
+  }
+  const el = capturedElement(id, generation);
   if (!el) {
     return `No element ${id} on the current page. The page changed since the last read — call read_page and use the new ids.`;
   }
@@ -298,13 +304,13 @@ function findText(query: string): ActionResult {
 }
 
 /** Executes one action in the page. Never throws — errors come back as results. */
-export async function act(action: AgentAction): Promise<ActionResult> {
+export async function act(action: AgentAction, generation?: number): Promise<ActionResult> {
   const { name, input } = action;
 
   try {
     switch (name) {
       case "click": {
-        const el = resolve(input);
+        const el = resolve(input, generation);
         if (typeof el === "string") return fail(el);
         await bringIntoView(el);
         const before = document.documentElement.childElementCount;
@@ -333,14 +339,14 @@ export async function act(action: AgentAction): Promise<ActionResult> {
       }
 
       case "type": {
-        const el = resolve(input);
+        const el = resolve(input, generation);
         if (typeof el === "string") return fail(el);
         const text = typeof input.text === "string" ? input.text : "";
         return await typeInto(el, text, input.submit === true);
       }
 
       case "select": {
-        const el = resolve(input);
+        const el = resolve(input, generation);
         if (typeof el === "string") return fail(el);
         if (!(el instanceof HTMLSelectElement)) {
           return fail(`${describe(el)} is not a <select>.`,
