@@ -148,6 +148,25 @@ function roleOf(el: Element): string {
   return tag;
 }
 
+/**
+ * A label's own words, without the control it wraps.
+ *
+ * `textContent` of <label>State <select>...</select></label> is "State" and
+ * then the name of every option, run together - and for a wrapped textarea it
+ * is the field's contents. The control's subtree is not part of its name.
+ */
+function labelText(label: HTMLLabelElement, control: Element): string {
+  let out = "";
+  const walker = document.createTreeWalker(label, NodeFilter.SHOW_TEXT);
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    const parent = node.parentElement;
+    if (parent && (parent === control || control.contains(parent) ||
+        parent.closest("select, textarea, option, datalist, script, style"))) continue;
+    out += ` ${node.textContent ?? ""}`;
+  }
+  return out;
+}
+
 function labelOf(el: Element): string {
   const labelledBy = el.getAttribute("aria-labelledby");
   if (labelledBy) {
@@ -161,12 +180,12 @@ function labelOf(el: Element): string {
   const ariaLabel = collapse(el.getAttribute("aria-label"), 120);
   if (ariaLabel) return ariaLabel;
 
-  if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
-    const labels = (el as HTMLInputElement).labels;
-    if (labels?.length) {
-      const text = collapse(labels[0].textContent, 120);
-      if (text) return text;
-    }
+  if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement) {
+    // <select> was left out, so every dropdown labelled the ordinary way -
+    // <label>State <select>...</select></label> - rendered with no name at all.
+    const labels = Array.from(el.labels ?? []);
+    const text = collapse(labels.map((label) => labelText(label, el)).join(" "), 120);
+    if (text) return text;
     const placeholder = collapse(el.getAttribute("placeholder"), 120);
     if (placeholder) return placeholder;
   }

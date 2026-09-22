@@ -631,6 +631,9 @@ export async function act(action: AgentAction, generation?: number): Promise<Act
             `"${match.textContent?.trim()}" isn't available in that dropdown.`);
         }
         el.value = match.value;
+        // A person's choice fires both, input first; some frameworks listen
+        // only for input.
+        el.dispatchEvent(new Event("input", { bubbles: true }));
         el.dispatchEvent(new Event("change", { bubbles: true }));
         return done(`Selected ${JSON.stringify(match.textContent?.trim())}.`,
           `Chose "${match.textContent?.trim()}".`);

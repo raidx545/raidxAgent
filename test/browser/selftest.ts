@@ -248,6 +248,7 @@ async function run(): Promise<void> {
   await controlStateScenario();
   await keyScenario();
   await fieldFitScenario();
+  await labelScenario();
   await appShellScrollScenario();
   await dialogCaptureScenario();
   await responsivenessScenario();
@@ -769,6 +770,31 @@ async function fieldFitScenario(): Promise<void> {
   check("fit: a field the page empties is reported, not called typed",
     !rej.ok, rej.detail, true);
 
+  host.remove();
+}
+
+/**
+ * A control is called what its label says - and only that.
+ *
+ * <select> never read its <label>, so every dropdown labelled the ordinary way
+ * rendered with no name; and a wrapping label's textContent carried the
+ * control's own text with it - every option's name, or a textarea's contents.
+ */
+async function labelScenario(): Promise<void> {
+  const host = document.createElement("div");
+  host.innerHTML = `
+    <label>State <select id="lb-s"><option>Choose</option><option>Karnataka</option></select></label>
+    <label>Notes <textarea id="lb-t">Priya called</textarea></label>`;
+  document.body.appendChild(host);
+  await new Promise((r) => setTimeout(r, 50));
+  const dom = captureDom();
+  const byId = new Map<string, { label: string }>();
+  const walk = (x: typeof dom.root): void => { if (x.attrs.id) byId.set(x.attrs.id, x); x.children.forEach(walk); };
+  walk(dom.root);
+  check("labels: a dropdown inside a <label> is named by it", byId.get("lb-s")?.label === "State",
+    JSON.stringify(byId.get("lb-s")?.label), true);
+  check("labels: a wrapped field's name leaves out the field's own text", byId.get("lb-t")?.label === "Notes",
+    JSON.stringify(byId.get("lb-t")?.label), true);
   host.remove();
 }
 
