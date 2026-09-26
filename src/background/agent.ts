@@ -852,7 +852,12 @@ function reportSanitization(capture: SanitizedCapture, emit: (e: AgentEvent) => 
   // transcript read exactly the same whether every picture was read or none
   // was, and a run that sent unread pictures looked like a clean one.
   const ocr = r.ocr;
-  if (ocr?.error) {
+  if (capture.screenshot && (!ocr || ocr.mode === "off")) {
+    // A screenshot is going to the model and nobody read the text in its
+    // pictures. That is a setting, not a failure - but it is exactly how a
+    // card number in a banner reaches the model, so it is said every time.
+    bits.push("⚠ text inside images was not checked - OCR is off in Settings, so pictures are sent as they are");
+  } else if (ocr?.error) {
     bits.push(`⚠ text in images could not be read (${ocr.error}) - pictures were blacked out instead`);
   } else if (ocr && ocr.mode !== "off" && !ocr.engine) {
     bits.push("⚠ no OCR engine was available, so text inside images was not checked");
