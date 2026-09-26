@@ -123,7 +123,16 @@ export const NAME_CUES =
   "Account\\s+holder|Account\\s+Name|Signed\\s+by|Submitted\\s+by|Prepared\\s+by|Approved\\s+by|" +
   "Requested\\s+by|Reported\\s+by|Assigned\\s+to|Posted\\s+by|Written\\s+by|Author|Owner|" +
   "Father'?s?\\s+Name|Mother'?s?\\s+Name|Spouse|Husband|Wife|Contact\\s+person|" +
-  "Name\\s+of\\s+(?:the\\s+)?(?:applicant|candidate|employee|customer|holder|person|company|firm)";
+  "Name\\s+of\\s+(?:the\\s+)?(?:applicant|candidate|employee|customer|holder|person|company|firm)|" +
+  // Identity documents: the relation lines of an Aadhaar or voter card, and
+  // the holder lines of a card or passbook.
+  "S\\s?/\\s?O|D\\s?/\\s?O|W\\s?/\\s?O|C\\s?/\\s?O|Son\\s+of|Daughter\\s+of|Wife\\s+of|Care\\s+of|" +
+  "Card\\s*holder|Card\\s+holder'?s?\\s+name|Holder'?s?\\s+name|Account\\s+holder'?s?\\s+name|" +
+  "Signed|Signatory|Given\\s+names?|Surname|Full\\s+name|First\\s+name|Last\\s+name|Middle\\s+name|" +
+  "Nominee'?s?\\s+name|Guardian'?s?\\s+name|Payee|Payer|Beneficiary\\s+name|Recipient|Sender|" +
+  // "Name" alone is everywhere ("Name your price"); with a colon after it,
+  // it is a label and what follows is the value.
+  "Name(?=\\s*[:：])";
 
 /** Street-type words that anchor an Indian postal address line. */
 export const STREET_TYPES =

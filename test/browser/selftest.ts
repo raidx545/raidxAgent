@@ -1,4 +1,5 @@
 import { sanitize } from "../../src/sanitize/sanitize";
+import { OCR_BOX_PAD, regionZoom } from "../../src/sanitize/ocr-screenshot";
 import { Vault } from "../../src/vault/vault";
 import { captureDom } from "../../src/capture/dom";
 import { spanRects } from "../../src/capture/spans";
@@ -1289,7 +1290,7 @@ async function ocrRedactionScenario(): Promise<void> {
     async available() { return true; },
     async recognize(images) {
       return images.map((img) => {
-        const zoom = dpr >= 2 ? 1 : 2;
+        const zoom = regionZoom(dpr);
         const w = (t: string, x: number, wd: number) => ({ text: t, x0: x * zoom, y0: 20 * zoom, x1: (x + wd) * zoom, y1: 50 * zoom, confidence: 92 });
         const words = [w("Call", 10, 40), w("98765", 60, 70), w("43210", 140, 70)];
         return { id: img.id, ms: 3, lines: [{ text: words.map((x) => x.text).join(" "), words, x0: 10, y0: 20, x1: 210, y1: 50, confidence: 92 }] };
@@ -1335,7 +1336,9 @@ async function ocrRedactionScenario(): Promise<void> {
     // 3px bleed on every edge - (150+6)*(30+6) = 5,616 - must be gone. Far
     // more means the canvas was blacked out whole; far less means a mis-mapped
     // box; and it must be nowhere near the whole canvas either way.
-    const expected = (150 + 6) * (30 + 6);
+    // The box is padded by a share of the text height on every side, then
+    // bled by 3px when it is painted.
+    const expected = (150 + 2 * OCR_BOX_PAD.x * 30 + 6) * (30 + 2 * OCR_BOX_PAD.y * 30 + 6);
     check("ocr paint: exactly the number's box was destroyed, not the whole canvas",
       gone >= expected * 0.9 && gone <= expected * 1.25 && gone < total * 0.3,
       `${gone} of ${total} marker pixels destroyed; expected about ${expected}`, true);

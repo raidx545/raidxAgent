@@ -150,7 +150,13 @@ export function isIfsc(raw: string): boolean {
 
 export function isIndianMobile(raw: string): boolean {
   const digits = raw.replace(/[\s()+-]/g, "");
-  const local = digits.replace(/^(91|0)/, "");
+  // Only a prefix that makes the number too long is a prefix. Stripping "91"
+  // unconditionally turned 9123456780 - a real number in the 91 series - into
+  // eight digits and rejected it, so every mobile starting 91 went undetected.
+  const local =
+    digits.length === 12 && digits.startsWith("91") ? digits.slice(2)
+    : digits.length === 11 && digits.startsWith("0") ? digits.slice(1)
+    : digits;
   if (!/^[6-9]\d{9}$/.test(local)) return false;
   if (/^(\d)\1{9}$/.test(local)) return false;
   return true;
@@ -174,6 +180,70 @@ export function isVehicleNumber(raw: string): boolean {
   return /^[A-Z]{2}\d{1,2}[A-Z]{0,3}\d{4}$/.test(raw.toUpperCase().replace(/[\s-]/g, ""));
 }
 
+
+// --- Driving licence ------------------------------------------------------
+
+/** State and union-territory codes an Indian licence or registration starts with. */
+const STATE_CODES = new Set(
+  "AN AP AR AS BR CH CG CT DD DL DN GA GJ HP HR JH JK KA KL LA LD MH ML MN MP MZ NL OD OR PB PY RJ SK TN TR TS UK UA UP WB".split(" "),
+);
+
+/**
+ * Indian driving licence: state code, two-digit RTO, year of issue, seven-digit
+ * serial - "MH12 20110012345", "DL-0420110149646". The state code and a
+ * plausible year are what keep a fifteen-character reference from passing.
+ */
+export function isDrivingLicence(raw: string): boolean {
+  const m = raw.toUpperCase().replace(/[\s-]/g, "").match(/^([A-Z]{2})(\d{2})((?:19|20)\d{2})(\d{7})$/);
+  if (!m) return false;
+  const year = Number(m[3]);
+  return STATE_CODES.has(m[1]) && year >= 1950 && year <= new Date().getFullYear() + 1;
+}
+
+// --- US Social Security number --------------------------------------------
+
+/** 3-2-4 with the ranges the SSA never issues excluded. */
+export function isSsn(raw: string): boolean {
+  const m = raw.match(/^(\d{3})[- ](\d{2})[- ](\d{4})$/);
+  if (!m) return false;
+  const [, area, group, serial] = m;
+  if (area === "000" || area === "666" || area[0] === "9") return false;
+  return group !== "00" && serial !== "0000";
+}
+
+// --- IBAN -----------------------------------------------------------------
+
+/** ISO 13616: move the first four characters to the end, letters to numbers, mod 97 = 1. */
+export function isIban(raw: string): boolean {
+  const iban = raw.toUpperCase().replace(/\s/g, "");
+  if (!/^[A-Z]{2}\d{2}[A-Z0-9]{11,30}$/.test(iban)) return false;
+  const moved = iban.slice(4) + iban.slice(0, 4);
+  let remainder = 0;
+  for (const ch of moved) {
+    const value = /\d/.test(ch) ? ch : String(ch.charCodeAt(0) - 55);
+    for (const digit of value) remainder = (remainder * 10 + Number(digit)) % 97;
+  }
+  return remainder === 1;
+}
+
+// --- Machine-readable zone ------------------------------------------------
+
+/**
+ * A line of a passport's or ID card's machine-readable zone.
+ *
+ * The MRZ repeats the holder's name, document number, nationality, date of
+ * birth and expiry in one run of capitals, digits and filler chevrons. OCR
+ * reads it well - it is designed to be read by machines - and it gives away
+ * everything the page around it was careful about. A long run with several
+ * fillers in it is nothing else.
+ */
+export function isMrzLine(raw: string): boolean {
+  const line = raw.replace(/\s/g, "");
+  if (line.length < 28 || line.length > 46) return false;
+  if (!/^[A-Z0-9<]+$/.test(line)) return false;
+  const fillers = (line.match(/</g) ?? []).length;
+  return fillers >= 3 && /[A-Z]/.test(line) && (/<</.test(line) || /\d{6}/.test(line));
+}
 
 // --- Script-independent digits --------------------------------------------
 

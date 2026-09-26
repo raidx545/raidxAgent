@@ -122,6 +122,31 @@ async function buildSelfTest() {
  * so serving dist/ over http and opening this page exercises the exact bundle,
  * worker, wasm core and language data the extension ships.
  */
+/**
+ * The leak audit: the whole pipeline, with real Tesseract, over pictures of
+ * PII - then the redacted result read again by a stronger reader. Anything it
+ * finds is a value the model would have seen.
+ */
+async function buildOcrAudit() {
+  const bundle = await esbuild.build({
+    entryPoints: ["test/browser/ocr-audit.ts"],
+    bundle: true,
+    write: false,
+    format: "iife",
+    platform: "browser",
+    target: "chrome120",
+    logLevel: "silent",
+  });
+  await writeFile(
+    "dist/ocr-audit.html",
+    `<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>VLESS OCR leak audit</title></head>
+<body><p>Auditing…</p><script>${bundle.outputFiles[0].text}</script></body>
+</html>`,
+  );
+}
+
 async function buildOcrCheck() {
   const bundle = await esbuild.build({
     entryPoints: ["test/browser/ocr-check.ts"],
@@ -183,8 +208,10 @@ if (watch) {
   await Promise.all(builds.map((options) => esbuild.build(options)));
   await buildSelfTest();
   await buildOcrCheck();
+  await buildOcrAudit();
   await buildPanelPreview();
   console.log("\n  dist/selftest.html      — open in Chrome to test canvas redaction");
   console.log("  dist/ocr-check.html     — serve dist/ over http to test the OCR engine");
+  console.log("  dist/ocr-audit.html     — serve dist/ over http: can any PII be read after redaction?");
   console.log("  dist/panel-preview.html — the side panel, with a scripted run");
 }

@@ -1,4 +1,4 @@
-import { ocrRegions, ocrScreenshot, type Cropper } from "../src/sanitize/ocr-screenshot";
+import { ocrRegions, ocrScreenshot, type Cropper, type CropRequest } from "../src/sanitize/ocr-screenshot";
 import { sanitize } from "../src/sanitize/sanitize";
 import { Vault } from "../src/vault/vault";
 import type { CapturedNode, DomCapture, ScreenshotMeta } from "../src/capture/types";
@@ -212,6 +212,98 @@ function fakeEngine(behaviour: { canvasFails?: boolean } = {}): OcrEngine {
   // collect/replay sequences must have agreed, or sanitize would have thrown.
   want(typeof result.report.screenshotError === "string" || result.screenshot !== undefined,
     "no screenshot and no explanation");
+}
+
+// ------------------------------------------ what the leak audit found missing
+
+/** One picture below the fold in a whole-page screenshot, read by a scripted engine. */
+function tallPage(extra: CapturedNode[] = []): DomCapture {
+  const below = n({ id: 1, tag: "img", role: "image", attrs: { alt: "" }, bbox: [20, 1400, 400, 120], visible: false });
+  return {
+    url: "https://bank.example.in/", origin: "https://bank.example.in", title: "Statement",
+    capturedAt: 1,
+    viewport: { width: 1000, height: 800, dpr: 1, scrollX: 0, scrollY: 0, pageHeight: 2000 },
+    root: n({ id: 0, tag: "body", role: "document", bbox: [0, 0, 1000, 2000], children: [below, ...extra] }),
+    stats: { examined: 2, kept: 2, pruned: 0 },
+  };
+}
+const pageShot: ScreenshotMeta = { ...shot, kind: "page", cssHeight: 2000 };
+
+/** The picture is a bank slip: the label on one line, the number on the next. */
+function slipEngine(read: string[] = []): OcrEngine {
+  return {
+    name: "fake",
+    async available() { return true; },
+    async recognize(images: OcrImage[]): Promise<OcrResult[]> {
+      return images.map((img): OcrResult => {
+        read.push(img.id);
+        if (!img.id.startsWith("ocr-1")) return { id: img.id, ms: 1, lines: [] };
+        const label = [word("Account", 10, 10, 70), word("Number", 90, 10, 70)];
+        const value = [word("50100234567891", 10, 40, 150)];
+        return { id: img.id, ms: 2, lines: [
+          { text: "Account Number", words: label, x0: 10, y0: 10, x1: 160, y1: 30, confidence: 90 },
+          { text: "50100234567891", words: value, x0: 10, y0: 40, x1: 160, y1: 60, confidence: 90 },
+        ] };
+      });
+    },
+  };
+}
+
+{
+  // "Visible" meant "in the viewport"; a whole-page screenshot shows the rest too.
+  const dom = tallPage();
+  const read: string[] = [];
+  const requested: CropRequest[] = [];
+  const recordingCrop: Cropper = async (_shot, rects) => {
+    requested.push(...rects);
+    return rects.map((r) => ({ id: r.id, dataUrl: `crop:${r.id}`, x: r.x, y: r.y, zoom: 1 }));
+  };
+  const out = await ocrScreenshot({
+    dom, shot: pageShot, viewport: dom.viewport, findings: [], mode: "images", engine: slipEngine(read), crop: recordingCrop,
+  });
+  want(read.includes("ocr-1"), "a picture below the fold of a whole-page screenshot was not read");
+  // Each picture is read as it is, cleaned, and thresholded.
+  const variants = requested.find((r) => r.id === "ocr-1")?.variants ?? [];
+  want(["plain", "clean", "binary"].every((v) => variants.includes(v as never)),
+    `a picture is not read in every preparation: ${variants.join(", ")}`);
+  // The label is on the line above; the account number is found anyway.
+  want(out.findings.some((f) => f.kind === "bank_account" && f.value === "50100234567891"),
+    `an account number whose label is on the line above was missed: ${out.findings.map((f) => f.kind).join(", ")}`);
+  // A viewport shot still reads only what is in it.
+  const viewportOnly = await ocrScreenshot({
+    dom, shot, viewport: dom.viewport, findings: [], mode: "images", engine: slipEngine(), crop: fakeCrop,
+  });
+  want(viewportOnly.report.regionsScanned === 0, "a picture outside a viewport screenshot was read");
+}
+
+{
+  // A picture that could not be read is burned, never sent unread.
+  const dom = tallPage();
+  const failing: OcrEngine = {
+    name: "fake", async available() { return true; },
+    async recognize(images) { return images.map((img) => ({ id: img.id, ms: 1, lines: [], error: "timed out" })); },
+  };
+  const out = await ocrScreenshot({ dom, shot: pageShot, viewport: dom.viewport, findings: [], mode: "images", engine: failing, crop: fakeCrop });
+  const burn = out.findings.find((f) => f.nodeId === 1);
+  want(burn?.action === "burn-region" && burn.shape === "pixel",
+    "a picture whose read failed was left to go out unread");
+  want(out.report.regionsFailed === 1, "the failed picture was not counted");
+}
+
+{
+  // Past the cap, a picture is burned rather than skipped.
+  const many = Array.from({ length: 160 }, (_, i) =>
+    n({ id: 10 + i, tag: "img", role: "image", attrs: { alt: "" }, bbox: [20, 10 + i * 5, 200 - i, 60], visible: true }));
+  const dom = tallPage(many);
+  const quiet: OcrEngine = {
+    name: "fake", async available() { return true; },
+    async recognize(images) { return images.map((img) => ({ id: img.id, ms: 1, lines: [] })); },
+  };
+  const out = await ocrScreenshot({ dom, shot: pageShot, viewport: dom.viewport, findings: [], mode: "images", engine: quiet, crop: fakeCrop });
+  want(out.report.regionsSkipped > 0, "the cap was not reached - the test is not testing it");
+  const burned = new Set(out.findings.filter((f) => f.action === "burn-region").map((f) => f.nodeId));
+  want(burned.size === out.report.regionsSkipped,
+    `${out.report.regionsSkipped} pictures past the cap, ${burned.size} burned - the rest went out unread`);
 }
 
 console.log(JSON.stringify({ failures: fails, pass: fails.length === 0 }, null, 2));

@@ -77,16 +77,52 @@ const SCANNED: Field[] = [
  * about case or script.
  */
 const LETTER = "[\\p{L}\\p{M}'’.-]";
-const PROPER = `\\p{Lu}${LETTER}*(?:\\s+(?:\\p{Lu}${LETTER}*|` +
+// Words of a name are separated by spaces, never by a line break: on an ID
+// card read by OCR the next line is the next field, and "RAHUL VERMA" must not
+// run on into "DOB".
+const PROPER = `\\p{Lu}${LETTER}*(?:[^\\S\\n]+(?:\\p{Lu}${LETTER}*|` +
   [...ORG_CONNECTORS].join("|") + "))*";
 
+/**
+ * Makes every ASCII letter of a pattern match either case, leaving escapes
+ * such as \\s alone. The cue list is written "Account holder"; pages write
+ * "Account Holder", "ACCOUNT HOLDER" and "account holder", and each of those
+ * used to be missed. The name after the cue keeps its case rule.
+ */
+function anyCase(pattern: string): string {
+  let out = "";
+  for (let i = 0; i < pattern.length; i++) {
+    const ch = pattern[i];
+    if (ch === "\\") {
+      out += ch + (pattern[i + 1] ?? "");
+      i++;
+    } else if (/[A-Za-z]/.test(ch)) {
+      out += `[${ch.toUpperCase()}${ch.toLowerCase()}]`;
+    } else {
+      out += ch;
+    }
+  }
+  return out;
+}
+
+/**
+ * Each honorific as written and in capitals: "Mr" and "MR", "Smt" and "SMT" -
+ * printed documents and ID cards use the second. Not lowercase: "miss" and
+ * "hon" in running text are ordinary words.
+ */
+const HONORIFICS_BOTH = HONORIFICS.split("|")
+  .flatMap((h) => [h, h.replace(/(\\.)|([a-z])/g, (m, escape) => escape ?? m.toUpperCase())])
+  .join("|");
+
 const RE_HONORIFIC = new RegExp(
-  `\\b(?:${HONORIFICS})\\.?\\s+(${PROPER})`,
+  `\\b(?:${HONORIFICS_BOTH})\\.?\\s+(${PROPER})`,
   "gu",
 );
 
 const RE_CUE = new RegExp(
-  `\\b(?:${NAME_CUES})\\b\\s*[:,-]?\\s+(${PROPER})`,
+  // "Name: Priya", "Name:Priya", "Name :\nPRIYA" - OCR and forms drop or add
+  // the space after the colon, and on a card the value is often a line down.
+  `(?<![\\p{L}])(?:${anyCase(NAME_CUES)})(?![\\p{L}])(?:\\s*[:：,-]\\s*|\\s+)(${PROPER})`,
   "gu",
 );
 
@@ -523,6 +559,110 @@ function escapeRegex(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+/**
+ * A column header that says the cells under it are people.
+ *
+ * A list of customers, a class register, an inbox table, a payroll sheet: the
+ * names in them carry no title, no "Dear", no label of their own - the column
+ * header is the label, once, at the top. Every strategy above reads a node on
+ * its own, so none of them fired, and a CRM page went to the model with every
+ * customer's name in the clear.
+ */
+const NAME_HEADER =
+  /^(?:(?:full|customer|client|employee|student|patient|member|user|contact|candidate|applicant|owner|holder|account\s+holder|card\s*holder|sender|recipient|beneficiary|nominee|guardian|father'?s?|mother'?s?|spouse|first|last|given|family|passenger|guest|tenant|buyer|seller)\s+)?names?$|^(?:customer|client|employee|student|patient|member|candidate|applicant|sender|from|recipient|beneficiary|nominee|passenger|guest|tenant|buyer|contact\s+person|full\s+name)$/i;
+
+export function isNameHeader(text: string): boolean {
+  return NAME_HEADER.test(text.trim().replace(/[:*]+$/, "").trim());
+}
+
+/** Headers after which a single word is a whole value: "First name", "Surname". */
+export function takesSingleWord(header: string): boolean {
+  return /\b(first|given|last|family|sur)\s*name|\bsurname\b/i.test(header);
+}
+
+/**
+ * Could this cell be a person's name? Capitalised words - "Arjun Mehta",
+ * "MEHTA ARJUN", "R. K. Narayan" - and nothing a name cannot be. Two words
+ * at least, unless the header asked for one: under "Name", a lone "WhatsApp"
+ * or "Registered" is the page's furniture far more often than a person.
+ */
+export function looksLikeNameCell(text: string, single = false): boolean {
+  const value = text.trim();
+  if (value.length < 3 || value.length > 60) return false;
+  if (/[\d@#/\\|<>:;!?()[\]{}=+*&%$]/.test(value)) return false;
+  const words = value.split(/\s+/);
+  if (words.length > 5 || (words.length < 2 && !single)) return false;
+  if (!words.every((w) => /^\p{Lu}/u.test(w) || ORG_CONNECTORS.has(w.toLowerCase()))) return false;
+  if (isNameHeader(value)) return false;
+  // The strict test, not the one for names a cue introduced: a header is
+  // weaker evidence than "Dear", and a form's "Date Of Birth" label sitting
+  // under its "Name" label must not pass.
+  return plausibleName(value) && !NEVER_STARTS_A_NAME.has(words[0].replace(/[^\p{L}]/gu, "").toLowerCase());
+}
+
+/** Things in a column that are the page's own furniture, not its data. */
+const NOT_A_CELL = new Set(["label", "button", "heading", "th", "columnheader", "option", "textbox", "select"]);
+
+/**
+ * Nodes holding the value a name label or header points at.
+ *
+ * Beside it: "Name" / "Priya Sharma" as two elements on one row, the way a
+ * profile page or a <dl> lays out a record. Below it: the cells of a column
+ * headed "Customer", left-aligned with the header or centred inside it,
+ * walked down until the column stops looking like names or a gap says the
+ * table has ended. Geometry rather than table structure, because the same
+ * list is a <table> on one site and a grid of <div>s on the next, and the
+ * capture flattens wrappers either way.
+ *
+ * Maps each node to whether a single word is enough there.
+ */
+function nameValueCells(capture: DomCapture): Map<number, boolean> {
+  const nodes = [...walkCapture(capture.root)];
+  const cells = new Map<number, boolean>();
+  const isCell = (n: CapturedNode) => !!n.text && !NOT_A_CELL.has(n.role) && !NOT_A_CELL.has(n.tag);
+
+  for (const label of nodes) {
+    const text = (label.text ?? label.label ?? "").trim();
+    if (!text || text.length > 30 || !isNameHeader(text)) continue;
+    const [lx, ly, lw, lh] = label.bbox;
+    if (lw <= 0 || lh <= 0) continue;
+    const single = takesSingleWord(text);
+
+    // Beside it, on the same row.
+    const middle = ly + lh / 2;
+    const beside = nodes
+      .filter((n) => n !== label && isCell(n) && n.bbox[0] >= lx + lw - 2 && n.bbox[0] - (lx + lw) < 400 &&
+        Math.abs(n.bbox[1] + n.bbox[3] / 2 - middle) < Math.max(lh, n.bbox[3]) * 0.6)
+      .sort((a, b) => a.bbox[0] - b.bbox[0])[0];
+    if (beside) cells.set(beside.id, single);
+
+    // Below it - unless it ends in a colon, which makes it a label whose
+    // value is beside it, not the head of a column.
+    if (/:\s*$/.test(text)) continue;
+    const tolerance = Math.max(12, lh);
+    const below = nodes
+      .filter((n) => {
+        if (n === label || !isCell(n) || n.bbox[1] <= ly + lh * 0.5) return false;
+        const centre = n.bbox[0] + n.bbox[2] / 2;
+        return Math.abs(n.bbox[0] - lx) <= tolerance || (centre >= lx && centre <= lx + lw);
+      })
+      .sort((a, b) => a.bbox[1] - b.bbox[1]);
+    let lastBottom = ly + lh;
+    let misses = 0;
+    for (const n of below) {
+      if (n.bbox[1] - lastBottom > Math.max(lh, n.bbox[3]) * 3) break;
+      lastBottom = Math.max(lastBottom, n.bbox[1] + n.bbox[3]);
+      if (looksLikeNameCell(n.text ?? "", single)) {
+        cells.set(n.id, single);
+        misses = 0;
+      } else if (++misses >= 3) {
+        break;
+      }
+    }
+  }
+  return cells;
+}
+
 let seq = 0;
 
 function make(
@@ -568,6 +708,7 @@ export const tier3Entities: Detector = {
     }
 
     const gazetteer = buildGazetteer(capture, priorFindings);
+    const nameCells = nameValueCells(capture);
 
     for (const node of walkCapture(capture.root)) {
       for (const field of SCANNED) {
@@ -615,6 +756,14 @@ export const tier3Entities: Detector = {
                 "capitalised word beside a name this page already declared");
             }
           }
+        }
+
+        // -- 1b. a cell in a column headed "Name" ---------------------------
+        if (field === "text" && nameCells.has(node.id) && looksLikeNameCell(text, nameCells.get(node.id))) {
+          const value = text.trim();
+          const start = text.indexOf(value);
+          propose(RE_ORG_WORD.test(value) ? "org_name" : "person_name", [start, start + value.length], value, "high",
+            "the value a name label or column header points at");
         }
 
         // -- 2. honorific ---------------------------------------------------

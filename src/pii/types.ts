@@ -11,6 +11,12 @@ export type PiiKind =
   | "passport"
   | "voter_id"
   | "vehicle_number"
+  | "driving_licence"
+  | "ssn"
+  /** A one-time code. Always sealed: seeing it is the permission it grants. */
+  | "otp"
+  /** A password, API key or access token shown on screen. Always sealed. */
+  | "secret"
   | "phone"
   | "email"
   | "ip_address"

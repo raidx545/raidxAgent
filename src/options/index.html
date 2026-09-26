@@ -89,15 +89,16 @@
 
     <label for="ocrMode">Read text in images (OCR)</label>
     <select id="ocrMode">
-      <option value="images">Images and canvases — what the page tree cannot see</option>
-      <option value="full">Whole screenshot — slower, catches everything</option>
+      <option value="full">Whole screenshot and every image — catches the most (recommended)</option>
+      <option value="images">Images and canvases only — faster, misses text drawn outside them</option>
       <option value="off">Off</option>
     </select>
     <p class="hint">
       A phone number baked into a picture, a scanned invoice, a canvas-drawn document: none of it is
       text to the page tree, all of it is text to the model. OCR reads those pixels first so the same
-      placeholder covers the picture and the page. Adds about a second per image. Only applies while
-      screenshots are sent.
+      placeholder covers the picture and the page. Each picture is read several ways — as it is,
+      contrast-cleaned, and thresholded — so faint, small and light-on-dark text is read too. A picture
+      that cannot be read is blacked out rather than sent. Only applies while screenshots are sent.
     </p>
 
     <label for="maxSteps">Step limit per task</label>

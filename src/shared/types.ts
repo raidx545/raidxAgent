@@ -255,7 +255,10 @@ export const DEFAULT_SETTINGS: Settings = {
   customBaseUrl: "",
   maxSteps: 40,
   reasoningEffort: "standard",
-  ocrMode: "images",
+  // The whole screenshot: text in closed shadow roots, CSS-generated content,
+  // SVG and video frames is in no image region and no tree node, and only a
+  // full read covers it.
+  ocrMode: "full",
   confirmRisky: true,
   sendScreenshot: true,
   fullPageCapture: false,

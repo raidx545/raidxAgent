@@ -39,6 +39,11 @@ export interface OcrImage {
   id: string;
   /** PNG or JPEG data URL. */
   dataUrl: string;
+  /**
+   * How the engine should look for text: "auto" for laid-out text, "sparse"
+   * for text scattered across a picture. Defaults to auto.
+   */
+  psm?: "auto" | "sparse";
 }
 
 export interface OcrResult {
@@ -67,8 +72,17 @@ export type OcrResponse =
   | { ok: true; kind: "status"; ready: boolean; engine: string; error?: string }
   | { ok: false; error: string };
 
-/** Words below this are noise - a smudge Tesseract guessed a letter for. */
-export const MIN_WORD_CONFIDENCE = 30;
+/**
+ * Words below this are noise - a smudge Tesseract guessed a letter for.
+ *
+ * It was 30, and that threw away real words: a phone number read as "98765"
+ * at 80 and "43210" at 25 became "98765" alone, too short to be a phone
+ * number, so neither half was covered. A word read with low confidence is
+ * still a word on the screen the model will read, and a detector that sees it
+ * can still recognise it - a false positive costs a black bar, a dropped word
+ * costs the value.
+ */
+export const MIN_WORD_CONFIDENCE = 5;
 
 /**
  * Turns a recogniser's block tree into flat lines, dropping low-confidence

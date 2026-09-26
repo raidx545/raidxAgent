@@ -69,7 +69,7 @@ export interface SanitizePolicy {
 export const DEFAULT_POLICY: SanitizePolicy = {
   burnUnverifiedRegions: true,
   aggressiveNames: false,
-  ocr: "images",
+  ocr: "full",
 };
 
 /**

@@ -26,6 +26,10 @@ const PREFIX: Record<PiiKind, string> = {
   passport: "PASSPORT",
   voter_id: "VOTERID",
   vehicle_number: "VEHICLE",
+  driving_licence: "DL",
+  ssn: "SSN",
+  otp: "OTP",
+  secret: "SECRET",
   phone: "PHONE",
   email: "EMAIL",
   ip_address: "IP",
@@ -43,6 +47,29 @@ const PREFIX: Record<PiiKind, string> = {
   qr_code: "QRCODE",
   unverified_region: "FRAME",
 };
+
+/**
+ * Kinds whose value is never kept, however it was found.
+ *
+ * A one-time code, a password or an API key on the screen authorises whoever
+ * holds it. Tokenizing one the ordinary way kept the value in the vault, where
+ * the agent could resolve it and type it anywhere a page asked. Sealing keeps
+ * the join - the same secret seen twice gets one token - through a hash of the
+ * value, never the value.
+ */
+export const SEALED_KINDS: ReadonlySet<PiiKind> = new Set<PiiKind>(["otp", "secret", "credential_field"]);
+
+/** A stable, non-reversible key for a sealed value. Not a security boundary - it only has to join. */
+function fingerprint(value: string): string {
+  let a = 0x811c9dc5;
+  let b = 0x01000193;
+  for (let i = 0; i < value.length; i++) {
+    const c = value.charCodeAt(i);
+    a = Math.imul(a ^ c, 0x01000193) >>> 0;
+    b = Math.imul(b ^ c, 0x5bd1e995) >>> 0;
+  }
+  return `${a.toString(36)}${b.toString(36)}:${value.length}`;
+}
 
 /** Matches a token anywhere in a string. Kept in one place deliberately. */
 export const TOKEN_PATTERN = /<([A-Z][A-Z0-9]*)_(\d+)>/g;
@@ -84,6 +111,15 @@ export class Vault {
    * same value and kind returns the same token.
    */
   tokenize(value: string, kind: PiiKind): string {
+    if (SEALED_KINDS.has(kind)) {
+      const key = kind + " #" + fingerprint(value);
+      const existing = this.byValue.get(key);
+      if (existing) return existing;
+      const token = this.seal(kind);
+      this.byValue.set(key, token);
+      return token;
+    }
+
     const key = kind + " " + value;
     const existing = this.byValue.get(key);
     if (existing) return existing;

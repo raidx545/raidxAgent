@@ -21,6 +21,12 @@ interface Rule {
   validate?: (raw: string) => boolean;
   confidence: Confidence;
   why: string;
+  /**
+   * The shape proves the kind on its own - a checksum or a structure nothing
+   * else has - so the kind's usual demand for a nearby cue does not apply.
+   * An IBAN is a bank account without the word "account" beside it.
+   */
+  standalone?: boolean;
 }
 
 const RULES: Rule[] = [
@@ -181,6 +187,75 @@ const RULES: Rule[] = [
     why: "Indian vehicle registration format",
   },
   {
+    kind: "driving_licence",
+    pattern: /\b[A-Za-z]{2}[\s-]?\d{2}[\s-]?(?:19|20)\d{2}[\s-]?\d{7}\b/g,
+    validate: check.isDrivingLicence,
+    confidence: "high",
+    why: "Indian driving licence: state code, RTO, year of issue, serial",
+  },
+  {
+    kind: "ssn",
+    pattern: /(?<![\d-])\d{3}-\d{2}-\d{4}(?![\d-])/g,
+    validate: check.isSsn,
+    confidence: "high",
+    why: "US Social Security number in 3-2-4 form, outside the never-issued ranges",
+  },
+  {
+    kind: "bank_account",
+    pattern: /\b[A-Z]{2}\d{2}(?: ?[A-Z0-9]{4}){2,7}(?: ?[A-Z0-9]{1,3})?\b/g,
+    validate: check.isIban,
+    standalone: true,
+    confidence: "certain",
+    why: "IBAN with a valid mod-97 check",
+  },
+  {
+    // A passport or ID card's machine-readable zone repeats the name, number,
+    // birth date and expiry in one run - everything the rest of the page hid.
+    kind: "passport",
+    pattern: /(?<![A-Z0-9<])[A-Z0-9<]{28,46}(?![A-Z0-9<])/g,
+    validate: check.isMrzLine,
+    standalone: true,
+    confidence: "high",
+    why: "a line of a passport or ID card machine-readable zone",
+  },
+  {
+    // One-time codes. Seeing one is the permission it grants, so the vault
+    // seals them - nothing can resolve or type a sealed token.
+    kind: "otp",
+    pattern:
+      /\b(?:otp|one[\s-]?time\s+(?:password|passcode|pin|code)|verification\s+code|security\s+code|confirmation\s+code|auth(?:entication)?\s+code|log[\s-]?in\s+code|sign[\s-]?in\s+code|access\s+code|passcode|2fa\s+code|2-step\s+(?:verification\s+)?code)\b[^\d\n]{0,40}?(\d{4,8})(?!\d)/gi,
+    confidence: "high",
+    why: "a one-time code after the words that introduce one",
+  },
+  {
+    kind: "otp",
+    pattern:
+      /(?<!\d)(\d{4,8})\s+is\s+(?:your|the)\s+(?:otp|one[\s-]?time\s+(?:password|passcode|code)|verification\s+code|security\s+code|log[\s-]?in\s+code|confirmation\s+code|code)\b/gi,
+    confidence: "high",
+    why: "a one-time code announced as one",
+  },
+  {
+    // Credentials with a recognisable shape. Sealed by the vault.
+    kind: "secret",
+    pattern:
+      /\b(?:(?:sk|pk|rk)[-_](?:live|test|proj|ant)[-_][A-Za-z0-9_-]{12,}|sk-[A-Za-z0-9_-]{20,}|ghp_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}|xox[baprs]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}|eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}|nvapi-[A-Za-z0-9_-]{20,}|hf_[A-Za-z0-9]{30,}|glpat-[A-Za-z0-9_-]{20})/g,
+    confidence: "certain",
+    why: "an API key or access token by its issuer's prefix",
+  },
+  {
+    // "Password: Tiger@2024!", "Wi-Fi key = ..." - a secret shown in the clear.
+    // "PIN" alone is not here: in an Indian address it is the postcode.
+    kind: "secret",
+    pattern:
+      /\b(?:password|passwd|pwd|passcode|wi-?fi\s+(?:password|key)|(?:atm|card|upi|m-?)\s*pin|api[\s_-]?key|secret(?:\s+key)?|(?:access|auth|bearer|api)\s+token|private\s+key|recovery\s+(?:code|phrase)|seed\s+phrase)[^\S\n]*[:=][^\S\n]*(\S{4,80})/gi,
+    // The value is on the label's own line and is not itself a label: OCR
+    // that reads "API key:" at the end of one line must not take the next
+    // line's "Password:" as the key.
+    validate: (raw) => !/:$/.test(raw),
+    confidence: "high",
+    why: "a value shown after a password or key label",
+  },
+  {
     kind: "ip_address",
     pattern: /\b(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\b/g,
     confidence: "high",
@@ -315,7 +390,7 @@ function scanText(node: CapturedNode, field: Field, original: string): Finding[]
         continue;
       }
 
-      const context = NEEDS_CONTEXT.get(rule.kind) ?? RULE_CONTEXT.get(rule.why);
+      const context = rule.standalone ? undefined : NEEDS_CONTEXT.get(rule.kind) ?? RULE_CONTEXT.get(rule.why);
       if (context) {
         const window = text.slice(Math.max(0, start - 60), start + raw.length + 60);
         if (!context.test(window)) continue;
