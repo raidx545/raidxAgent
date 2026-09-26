@@ -840,6 +840,27 @@ function reportSanitization(capture: SanitizedCapture, emit: (e: AgentEvent) => 
   if (r.redact.textSpansCovered > 0) {
     bits.push(`${count(r.redact.textSpansCovered, "text span")} painted over in the screenshot`);
   }
+  // Distinct values, not painted boxes: the same number read from a picture
+  // and from a band of the whole screenshot is one value covered twice.
+  const inImages = new Set(
+    capture.findings.filter((f) => f.origin === "ocr" && f.value).map((f) => `${f.kind} ${f.value}`),
+  ).size;
+  if (r.redact.ocrSpansCovered > 0 && inImages > 0) {
+    bits.push(`${count(inImages, "value")} covered inside images`);
+  }
+  // What OCR could not do has to be said. It used to fail in silence: the
+  // transcript read exactly the same whether every picture was read or none
+  // was, and a run that sent unread pictures looked like a clean one.
+  const ocr = r.ocr;
+  if (ocr?.error) {
+    bits.push(`⚠ text in images could not be read (${ocr.error}) - pictures were blacked out instead`);
+  } else if (ocr && ocr.mode !== "off" && !ocr.engine) {
+    bits.push("⚠ no OCR engine was available, so text inside images was not checked");
+  } else if (ocr) {
+    const unread = ocr.regionsFailed + ocr.regionsSkipped;
+    if (unread > 0) bits.push(`${count(unread, "image")} could not be read and ${unread === 1 ? "was" : "were"} blacked out`);
+    if (ocr.bandsFailed > 0) bits.push(`⚠ part of the screenshot could not be read for text`);
+  }
   if (r.residual.length > 0) {
     bits.push(`⚠ ${count(r.residual.length, "finding")} survived sanitization`);
   }
