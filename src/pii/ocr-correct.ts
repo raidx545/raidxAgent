@@ -359,8 +359,14 @@ export function correctIdentifiers(
         };
       }
 
+      // An identifier is never printed with a thousands separator. "Total
+      // 21,712" fitted the PAN template once its 2s were read as Zs - so a
+      // run with a comma in it is an amount, and only an exact identifier the
+      // page already knows may be recovered from it.
+      const amount = run.some((w) => /\d,\d/.test(w.text));
+
       for (const template of TEMPLATES) {
-        if (best?.proven) break;
+        if (best?.proven || amount) break;
         const fitted = fit(raw, template.slots);
         if (!fitted) continue;
         if (fitted.corrections > template.maxCorrections) continue;
@@ -377,7 +383,7 @@ export function correctIdentifiers(
         if (!best || candidate.corrections < best.corrections) best = candidate;
       }
 
-      if (!best) {
+      if (!best && !amount) {
         const card = fitCard(raw);
         if (card) {
           best = {

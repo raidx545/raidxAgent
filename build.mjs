@@ -16,6 +16,10 @@ await cp("src/offscreen/vault-host.html", "dist/vault-host.html");
 await cp("src/wirelog/index.html", "dist/wirelog.html");
 await cp("src/inspector/inspector.css", "dist/inspector.css");
 await cp("icons", "dist/icons", { recursive: true });
+// Test pages to point the real extension at. Served from dist/ so a rebuild
+// does not delete them from under a running test.
+await cp("test/browser/ocr-page.html", "dist/ocr-page.html");
+await cp("test/browser/id-cards-page.html", "dist/id-cards-page.html");
 
 /**
  * Tesseract ships as three pieces that must all be inside the extension:
@@ -213,5 +217,7 @@ if (watch) {
   console.log("\n  dist/selftest.html      — open in Chrome to test canvas redaction");
   console.log("  dist/ocr-check.html     — serve dist/ over http to test the OCR engine");
   console.log("  dist/ocr-audit.html     — serve dist/ over http: can any PII be read after redaction?");
+  console.log("  dist/ocr-page.html      — OCR test page to run the extension against");
+  console.log("  dist/id-cards-page.html — Aadhaar, PAN, voter ID, licence, passport, bank and card specimens");
   console.log("  dist/panel-preview.html — the side panel, with a scripted run");
 }

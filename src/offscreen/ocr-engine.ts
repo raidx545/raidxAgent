@@ -40,8 +40,8 @@ const POOL_SIZE = Math.max(2, Math.min(8, (globalThis.navigator?.hardwareConcurr
 
 interface PoolWorker {
   worker: Worker;
-  /** The page-segmentation mode it is currently set to. */
-  psm: PSM;
+  /** The reading mode it is currently set to. */
+  mode: NonNullable<OcrImage["psm"]>;
   busy: boolean;
 }
 
@@ -71,7 +71,7 @@ async function makeWorker(base: string): Promise<PoolWorker> {
     // number, and so is "9876543210", but the boxes differ.
     preserve_interword_spaces: "1",
   });
-  return { worker, psm: PSM.AUTO, busy: false };
+  return { worker, mode: "auto", busy: false };
 }
 
 /** The pool, loaded on first use and kept for the life of the document. */
@@ -115,21 +115,26 @@ function withTimeout<T>(promise: Promise<T>, ms: number, what: string): Promise<
   });
 }
 
-const PSM_OF: Record<NonNullable<OcrImage["psm"]>, PSM> = {
+/** Engine parameters for each reading mode. */
+const MODE: Record<NonNullable<OcrImage["psm"]>, { tessedit_pageseg_mode: PSM; tessedit_char_whitelist: string }> = {
   // Blocks and paragraphs: documents, cards, anything laid out as text.
-  auto: PSM.AUTO,
+  auto: { tessedit_pageseg_mode: PSM.AUTO, tessedit_char_whitelist: "" },
   // Find as much text as possible in no particular order: UI screenshots,
   // banners, labels scattered across a picture. Reads what AUTO drops.
-  sparse: PSM.SPARSE_TEXT,
+  sparse: { tessedit_pageseg_mode: PSM.SPARSE_TEXT, tessedit_char_whitelist: "" },
+  // A machine-readable zone: capitals, digits and the filler chevron, and
+  // nothing else. The ordinary modes drop a line that is mostly "<" - the
+  // restricted alphabet is what makes Tesseract read it at all.
+  mrz: { tessedit_pageseg_mode: PSM.SINGLE_BLOCK, tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789<" },
 };
 
 async function readOne(slot: PoolWorker, image: OcrImage): Promise<OcrResult> {
   const started = performance.now();
   try {
-    const psm = PSM_OF[image.psm ?? "auto"];
-    if (slot.psm !== psm) {
-      await slot.worker.setParameters({ tessedit_pageseg_mode: psm });
-      slot.psm = psm;
+    const mode = image.psm ?? "auto";
+    if (slot.mode !== mode) {
+      await slot.worker.setParameters(MODE[mode]);
+      slot.mode = mode;
     }
     const { data } = await withTimeout(
       slot.worker.recognize(image.dataUrl, {}, { text: true, blocks: true }),

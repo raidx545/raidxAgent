@@ -24,15 +24,6 @@ const MAX_IMAGE_HEIGHT = 20000;
 /** Never take more than this many shots, however tall the page claims to be. */
 const MAX_TILES = 24;
 
-/**
- * Long edge, in device pixels, of the image handed onward.
- *
- * A full-page capture at devicePixelRatio is enormous, and every pixel becomes
- * tokens when it reaches a model - resent on every turn as history grows. This
- * keeps detail that matters for layout while cutting the cost several-fold.
- */
-const MAX_DELIVERED_EDGE = 2000;
-
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -75,7 +66,7 @@ export async function captureFullPage(
   if (!started) return { error: "The page did not respond to the full-page request." };
 
   try {
-    const { viewportHeight, dpr } = started;
+    const { viewportHeight } = started;
     let { pageHeight, pageWidth } = started;
 
     if (viewportHeight <= 0) {
@@ -170,13 +161,13 @@ export async function captureFullPage(
       tile.bitmap.close();
     }
 
-    const full = await deliver(canvas, scale, dpr);
-
+    // Full resolution. It is shrunk for the model only after it has been
+    // read and redacted - see fitForDelivery.
     return {
       shot: {
-        dataUrl: full.dataUrl,
+        dataUrl: await toDataUrl(canvas),
         kind: "page",
-        scale: full.scale,
+        scale,
         // A stitched page image starts at the document origin by construction.
         originX: 0,
         originY: 0,
@@ -184,7 +175,6 @@ export async function captureFullPage(
         cssHeight: height / scale,
         tiles: tiles.length,
         truncatedAtCssY: truncated ? height / scale : undefined,
-        downscaledFrom: full.downscaledFrom,
       },
     };
   } finally {
@@ -193,39 +183,3 @@ export async function captureFullPage(
   }
 }
 
-/**
- * Scales the finished image down to something a model can afford to read.
- *
- * Returns the *effective* scale, so coordinate maths downstream stays correct
- * after the resize - getting this wrong would burn rectangles in the wrong
- * place, which is worse than not burning them at all.
- */
-async function deliver(
-  canvas: OffscreenCanvas,
-  scale: number,
-  _dpr: number,
-): Promise<{ dataUrl: string; scale: number; downscaledFrom?: { width: number; height: number } }> {
-  const longest = Math.max(canvas.width, canvas.height);
-  if (longest <= MAX_DELIVERED_EDGE) {
-    return { dataUrl: await toDataUrl(canvas), scale };
-  }
-
-  const factor = MAX_DELIVERED_EDGE / longest;
-  const width = Math.max(1, Math.round(canvas.width * factor));
-  const height = Math.max(1, Math.round(canvas.height * factor));
-
-  const small = new OffscreenCanvas(width, height);
-  const ctx = small.getContext("2d");
-  if (!ctx) return { dataUrl: await toDataUrl(canvas), scale };
-
-  ctx.imageSmoothingQuality = "high";
-  ctx.drawImage(canvas, 0, 0, width, height);
-
-  return {
-    dataUrl: await toDataUrl(small),
-    // The image now holds fewer pixels per CSS pixel, so the scale shrinks by
-    // exactly the factor we resized by.
-    scale: scale * factor,
-    downscaledFrom: { width: canvas.width, height: canvas.height },
-  };
-}

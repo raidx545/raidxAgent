@@ -212,7 +212,7 @@ const RULES: Rule[] = [
     // A passport or ID card's machine-readable zone repeats the name, number,
     // birth date and expiry in one run - everything the rest of the page hid.
     kind: "passport",
-    pattern: /(?<![A-Z0-9<])[A-Z0-9<]{28,46}(?![A-Z0-9<])/g,
+    pattern: /(?<![A-Z0-9<«])[A-Z0-9<«]{28,50}(?![A-Z0-9<«])/g,
     validate: check.isMrzLine,
     standalone: true,
     confidence: "high",
@@ -256,6 +256,25 @@ const RULES: Rule[] = [
     why: "a value shown after a password or key label",
   },
   {
+    // Account-holder and member identifiers a bank, insurer or employer
+    // prints beside the name: customer ID, CIF, CRN, UAN, PRAN, ABHA, policy
+    // and member numbers. Only with the label - the number alone is anything.
+    kind: "identity_field",
+    pattern:
+      /\b(?:customer\s*id|cust\.?\s*id|cif(?:\s*no\.?)?|crn|relationship\s*no\.?|client\s*id|member\s*id|policy\s*(?:no\.?|number)|uan|pran|abha(?:\s*(?:no\.?|number|id))?|employee\s*(?:id|code)|roll\s*(?:no\.?|number)|enrol?ment\s*(?:no\.?|number|id))[^\S\n]*[.:#-]?[^\S\n]*([A-Z0-9][A-Z0-9-]{5,19})\b/gi,
+    validate: (raw) => /\d/.test(raw),
+    confidence: "high",
+    why: "an account or member identifier after its label",
+  },
+  {
+    // A card's expiry date. With the number covered it gives little away on
+    // its own, but it is half of what a card-not-present payment asks for.
+    kind: "payment_field",
+    pattern: /\b(?:valid\s*thru|valid\s*through|good\s*thru|exp(?:iry|\.)?(?:\s*date)?|expires?)[^\S\n]*[:.]?[^\S\n]*((?:0[1-9]|1[0-2])\s*\/\s*(?:\d{2}|20\d{2}))\b/gi,
+    confidence: "high",
+    why: "a card expiry date after its label",
+  },
+  {
     kind: "ip_address",
     pattern: /\b(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\b/g,
     confidence: "high",
@@ -282,8 +301,9 @@ const RULES: Rule[] = [
 
 /** Kinds that only get reported when the surrounding text confirms them. */
 const NEEDS_CONTEXT = new Map<PiiKind, RegExp>([
-  ["bank_account", /\b(a\/c|acct|account|bank|ifsc|branch)\b/i],
-  ["voter_id", /\b(voter|epic|election)\b/i],
+  // "A/c" as OCR reads it: "Alc", "A|c", "A1c".
+  ["bank_account", /\b(a\s*[\/l|1]\s*c|acct|account|bank|ifsc|branch|passbook)\b/i],
+  ["voter_id", /\b(voter|epic|election|elector'?s?)\b/i],
   ["passport", /\b(passport|travel document)\b/i],
 ]);
 

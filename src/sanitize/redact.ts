@@ -100,6 +100,54 @@ export async function canvasToDataUrl(canvas: OffscreenCanvas): Promise<string> 
 }
 
 /**
+ * Long edge, in device pixels, of a screenshot handed to the model.
+ *
+ * A full-page capture at devicePixelRatio is enormous, and every pixel becomes
+ * tokens when it reaches a model - resent on every turn as history grows.
+ */
+export const MAX_DELIVERED_EDGE = 2000;
+
+/**
+ * Shrinks an already-redacted screenshot to what a model can afford to read.
+ *
+ * This used to happen when the page was stitched, before anything was
+ * sanitized - so OCR and redaction ran on the shrunken image. A tall page came
+ * out at a sixth of its size: 15px text became 5px, too small for OCR to read
+ * and not too small for a vision model to guess at, so the pictures on it went
+ * out with their names and account numbers half-legible and never covered.
+ * Sanitizing at full resolution and shrinking the result means everything is
+ * read at the size it was painted, and nothing is lost by shrinking pixels
+ * that are already burned.
+ *
+ * Returns the effective scale, so any coordinate maths on the result stays
+ * right.
+ */
+export async function fitForDelivery(shot: ScreenshotMeta, maxEdge = MAX_DELIVERED_EDGE): Promise<ScreenshotMeta> {
+  const bitmap = await toBitmap(shot.dataUrl);
+  try {
+    const longest = Math.max(bitmap.width, bitmap.height);
+    if (longest <= maxEdge) return shot;
+    const factor = maxEdge / longest;
+    const canvas = new OffscreenCanvas(
+      Math.max(1, Math.round(bitmap.width * factor)),
+      Math.max(1, Math.round(bitmap.height * factor)),
+    );
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return shot;
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    return {
+      ...shot,
+      dataUrl: await canvasToDataUrl(canvas),
+      scale: shot.scale * factor,
+      downscaledFrom: { width: bitmap.width, height: bitmap.height },
+    };
+  } finally {
+    bitmap.close();
+  }
+}
+
+/**
  * Maps an element's box onto pixels in whichever image we were handed.
  *
  * bboxes are viewport-relative; the image may be a viewport shot or a stitched

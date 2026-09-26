@@ -239,10 +239,16 @@ export function isIban(raw: string): boolean {
  */
 export function isMrzLine(raw: string): boolean {
   const line = raw.replace(/\s/g, "");
-  if (line.length < 28 || line.length > 46) return false;
-  if (!/^[A-Z0-9<]+$/.test(line)) return false;
-  const fillers = (line.match(/</g) ?? []).length;
-  return fillers >= 3 && /[A-Z]/.test(line) && (/<</.test(line) || /\d{6}/.test(line));
+  // TD3 lines are 44 characters, TD1 30, TD2 36 - but OCR adds or drops a
+  // filler or two, so the range is given slack.
+  if (line.length < 28 || line.length > 50) return false;
+  if (!/^[A-Z0-9<«]+$/.test(line)) return false;
+  // OCR reads the filler chevron as "<", "«", "K" or "L". A long trailing run
+  // of those after at least two real chevrons is the zone's padding.
+  const chevrons = (line.match(/[<«]/g) ?? []).length;
+  const padded = /[<«KL]{8,}\d{0,2}$/.test(line);
+  if (chevrons >= 2 && padded && /^[PIVAC][A-Z<«]/.test(line)) return true;
+  return chevrons >= 3 && /[A-Z]/.test(line) && (/[<«]{2}/.test(line) || /\d{6}/.test(line));
 }
 
 // --- Script-independent digits --------------------------------------------

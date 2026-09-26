@@ -54,7 +54,12 @@ export const NEVER_STARTS_A_NAME = new Set(
   (
     "the a an this that these those and or but for to of in on at from by with " +
     "your our my their his her its you we us they it " +
-    "dear regards thanks please"
+    "dear regards thanks please " +
+    // Field labels. A cue is often the first half of a label - "Customer ID",
+    // "Account No.", "Holder Type" - and what follows is the rest of the
+    // label, not a name.
+    "id no number num code type status since details info information address email mobile phone " +
+    "dob yob gender sex age nationality signature photo"
   ).split(/\s+/),
 );
 
@@ -128,7 +133,7 @@ export const NAME_CUES =
   // the holder lines of a card or passbook.
   "S\\s?/\\s?O|D\\s?/\\s?O|W\\s?/\\s?O|C\\s?/\\s?O|Son\\s+of|Daughter\\s+of|Wife\\s+of|Care\\s+of|" +
   "Card\\s*holder|Card\\s+holder'?s?\\s+name|Holder'?s?\\s+name|Account\\s+holder'?s?\\s+name|" +
-  "Signed|Signatory|Given\\s+names?|Surname|Full\\s+name|First\\s+name|Last\\s+name|Middle\\s+name|" +
+  "Signed|Signatory|Given\\s+names?|Given\\s+name\\(s\\)|Elector'?s?\\s+name|Holder'?s?\\s+name|Surname|Full\\s+name|First\\s+name|Last\\s+name|Middle\\s+name|" +
   "Nominee'?s?\\s+name|Guardian'?s?\\s+name|Payee|Payer|Beneficiary\\s+name|Recipient|Sender|" +
   // "Name" alone is everywhere ("Name your price"); with a colon after it,
   // it is a label and what follows is the value.

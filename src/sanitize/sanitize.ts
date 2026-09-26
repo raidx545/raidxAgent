@@ -7,7 +7,7 @@ import { CollectingMinter } from "../vault/protocol";
 import type { MinterSource } from "../vault/remote";
 import { localSource } from "../vault/remote";
 import { tokenizeCapture, type TokenizeReport } from "./tokenize";
-import { redactScreenshot, type RedactReport } from "./redact";
+import { fitForDelivery, redactScreenshot, type RedactReport } from "./redact";
 import { ocrScreenshot, type Cropper, type OcrMode, type OcrReport } from "./ocr-screenshot";
 import type { OcrEngine } from "../pii/ocr";
 
@@ -64,6 +64,12 @@ export interface SanitizePolicy {
    * covers only what the tree found. Does nothing without an engine.
    */
   ocr: OcrMode;
+  /**
+   * Long edge, in pixels, of the screenshot handed on - it is shrunk to this
+   * after redaction. Infinity keeps it at full size, which is what an audit of
+   * the redaction itself needs.
+   */
+  deliverMaxEdge?: number;
 }
 
 export const DEFAULT_POLICY: SanitizePolicy = {
@@ -231,8 +237,10 @@ export async function sanitize(
       tokensByFinding,
     );
     // Same metadata, new pixels: the coordinate frame is unchanged by burning.
+    // Only now, with everything read and burned at full resolution, is it
+    // shrunk for the model.
     screenshot = result.screenshot
-      ? { ...capture.screenshot, dataUrl: result.screenshot }
+      ? await fitForDelivery({ ...capture.screenshot, dataUrl: result.screenshot }, policy.deliverMaxEdge)
       : undefined;
     redact = result.report;
     screenshotError = result.error ?? screenshotError;

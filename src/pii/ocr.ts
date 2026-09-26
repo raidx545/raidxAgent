@@ -43,7 +43,7 @@ export interface OcrImage {
    * How the engine should look for text: "auto" for laid-out text, "sparse"
    * for text scattered across a picture. Defaults to auto.
    */
-  psm?: "auto" | "sparse";
+  psm?: "auto" | "sparse" | "mrz";
 }
 
 export interface OcrResult {

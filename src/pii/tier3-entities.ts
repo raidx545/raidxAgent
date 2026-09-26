@@ -126,6 +126,32 @@ const RE_CUE = new RegExp(
   "gu",
 );
 
+/**
+ * An address introduced by its label and running to its PIN code.
+ *
+ * On a card or a form the address is several lines - house, street, locality,
+ * city, state, PIN - and only the street line looks like an address to the
+ * street detector. "Richmond Town, Bengaluru," on its own line went out in the
+ * clear while the line above it was covered. The label and the PIN bracket the
+ * whole thing.
+ */
+const RE_ADDRESS_BLOCK = new RegExp(
+  `(?<![\\p{L}])(?:${anyCase("Residential address|Permanent address|Correspondence address|Communication address|Present address|Billing address|Shipping address|Delivery address|Address|Addr")})` +
+    `\\s*[:：-]?\\s*([^@]{8,220}?[1-9]\\d{5})(?!\\d)`,
+  "gu",
+);
+
+/**
+ * The name on an identity card, which has no label of its own. An Aadhaar
+ * card prints the name, then "DOB:", then the gender, and a driving licence
+ * or school ID does much the same: the line straight above a birth-date line
+ * is the holder.
+ */
+const RE_NAME_ABOVE_DOB = new RegExp(
+  `(?:^|\\n)[^\\S\\n]*(${PROPER})[^\\S\\n]*\\n[^\\S\\n]*(?=${anyCase("DOB|D\\.O\\.B|Date of Birth|Year of Birth|YOB|Birth")})`,
+  "gu",
+);
+
 const RE_ORG = new RegExp(
   `\\b(${PROPER}\\s+(?:${ORG_SUFFIXES}))(?!\\p{L})`,
   "gu",
@@ -788,6 +814,14 @@ export const tier3Entities: Detector = {
             "follows a phrase that introduces a person or company");
         });
 
+        // -- 3b. the line above a birth date, on an identity card ------------
+        collect(RE_NAME_ABOVE_DOB, text, (phrase, start) => {
+          const { phrase: name, shift } = stripHonorific(phrase);
+          if (!/\s/.test(name.trim()) || !plausibleWithEvidence(name)) return;
+          propose("person_name", [start + shift, start + shift + name.length], name, "high",
+            "the line above a birth date on an identity card");
+        });
+
         // -- 4. organisation legal suffix -----------------------------------
         collect(RE_ORG, text, (phrase, start) => {
           const { phrase: name, shift } = trimLeading(phrase);
@@ -818,6 +852,14 @@ export const tier3Entities: Detector = {
             "house number followed by a street-type word");
         }
 
+        collect(RE_ADDRESS_BLOCK, text, (phrase, start) => {
+          // An address has parts: a comma or a line break between them, and
+          // words as well as the PIN.
+          if (!/[,\n]/.test(phrase) || !/\p{L}{3,}/u.test(phrase)) return;
+          propose("postal_address", [start, start + phrase.length], phrase, "high",
+            "an address from its label to its PIN code");
+        });
+
         // A named street with no house number - "MG Road", "Anna Salai" - is
         // an address line when the page around it is talking about a place:
         // a PIN, a city or state, or an address word within reach. Without
@@ -841,9 +883,14 @@ export const tier3Entities: Detector = {
         let pin: RegExpExecArray | null;
         while ((pin = RE_PIN.exec(text)) !== null) {
           const around = text.slice(Math.max(0, pin.index - 70), pin.index + 70).toLowerCase();
+          // A label counts when it labels this number: "PIN: 560025",
+          // "Pincode 560025". The word anywhere nearby did not - "Reference
+          // 634795 ... PIN code lookup is free" made a tracking code a PIN.
+          const before = text.slice(Math.max(0, pin.index - 24), pin.index).toLowerCase();
           const nearPlace =
             [...PLACES].some((p) => around.includes(p)) ||
-            /\b(pin|pincode|postal|address|state|district)\b/.test(around);
+            /\b(pin|pincode|pin\s*code|postal\s*code|zip)\s*(no\.?)?\s*[:.#-]?\s*$/.test(before) ||
+            /\baddress\b/.test(around);
           if (!nearPlace) continue;
           propose("pincode", [pin.index, pin.index + pin[0].length], pin[0], "high",
             "six-digit PIN beside a place name or address label");

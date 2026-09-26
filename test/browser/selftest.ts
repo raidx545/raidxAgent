@@ -1328,9 +1328,12 @@ async function ocrRedactionScenario(): Promise<void> {
     `ocrSpansCovered=${result.report.redact.ocrSpansCovered}, error=${result.report.screenshotError}`);
 
   if (result.screenshot) {
-    const after = await countMark(result.screenshot.dataUrl);
+    // The delivered image may have been shrunk after redaction; count its
+    // marker pixels at the size they were burned at.
+    const shrink = result.screenshot.scale / shot.scale;
+    const after = await countMark(result.screenshot.dataUrl) / (shrink * shrink);
     const total = before;
-    const gone = total - after;
+    const gone = Math.round(total - after);
     // The engine's box is 150x30 crop pixels, and the crop maps back to the
     // screenshot 1:1 at its own zoom, so exactly 150x30 image pixels plus the
     // 3px bleed on every edge - (150+6)*(30+6) = 5,616 - must be gone. Far

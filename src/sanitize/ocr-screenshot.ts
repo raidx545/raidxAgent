@@ -86,7 +86,7 @@ export interface OcrReport {
 }
 
 /** How a crop is prepared before it is read. */
-export type Variant = "plain" | "clean" | "binary";
+export type Variant = "plain" | "clean" | "binary" | "mrz";
 
 /** A piece of the screenshot handed to the engine, and how to map it back. */
 export interface Crop {
@@ -98,7 +98,7 @@ export interface Crop {
   /** Crop pixels per screenshot pixel; small text is enlarged before OCR. */
   zoom: number;
   /** How the engine should look for text in it. */
-  psm?: "auto" | "sparse";
+  psm?: "auto" | "sparse" | "mrz";
 }
 
 export interface CropRequest {
@@ -300,7 +300,7 @@ function binarise(image: ImageData): void {
   }
 }
 
-const PSM_FOR: Record<Variant, "auto" | "sparse"> = { plain: "auto", clean: "sparse", binary: "auto" };
+const PSM_FOR: Record<Variant, "auto" | "sparse" | "mrz"> = { plain: "auto", clean: "sparse", binary: "auto", mrz: "mrz" };
 
 /** The id a variant is read under; the plain read keeps the region's own id. */
 function variantId(id: string, variant: Variant): string {
@@ -341,7 +341,7 @@ export const cropWithCanvas: Cropper = async (shot, rects) => {
         if (variant !== "plain") {
           const image = ctx.getImageData(0, 0, width, height);
           if (variant === "clean") clean(image);
-          else binarise(image);
+          else binarise(image);  // "binary" and "mrz" alike
           ctx.putImageData(image, 0, 0);
         }
         crops.push({
@@ -518,7 +518,9 @@ export async function ocrScreenshot(args: {
     if (box.w <= 0 || box.h <= 0) continue;
     requests.push({
       id: region.id, x: box.x, y: box.y, w: box.w, h: box.h, zoom: zoomForRegions,
-      variants: ["plain", "clean", "binary"],
+      // "mrz" reads with the alphabet restricted to a machine-readable
+      // zone's; only passport-zone findings are taken from it.
+      variants: ["plain", "clean", "binary", "mrz"],
     });
     byId.set(region.id, region);
   }
@@ -677,15 +679,47 @@ export async function ocrScreenshot(args: {
   }
   const knownExact = () => [...known.values()].map((k) => ({ value: k.exact, kind: k.kind }));
 
-  for (const block of blocks) {
-    if (block.lines.length === 0) continue;
+  // Text the page tree already has. A band of the whole screenshot re-reads
+  // the page's own headings and paragraphs, and the tree - with their real
+  // case and structure - has already judged them. Reading them again from
+  // pixels only adds mistakes: "A CUSTOMER TABLE AND A RECORD", a heading in
+  // capitals, read as the cue "Customer" and a name.
+  const treeText = pageText(dom);
 
-    // Detectors over the whole picture's text, so a label on one line is
-    // context for the value on the next.
+  // The restricted-alphabet reads: good for a machine-readable zone, garbage
+  // for anything else. Only the zone is taken from them - and the names in
+  // it, which are then looked for in the ordinary reads.
+  for (const block of blocks) {
+    if (block.crop.psm !== "mrz" || block.lines.length === 0) continue;
     const joined = joinLines(block.lines);
     for (const hit of await scanText(joined.text)) {
-      if (!hit.span || !hit.value) continue;
+      if (hit.kind !== "passport" || !hit.span || !hit.value || !/</.test(hit.value)) continue;
       for (const seg of joined.segments(hit.span[0], hit.span[1])) {
+        emit(block, seg.line, seg.start, seg.end, hit.kind, hit.confidence,
+          `read from image pixels by OCR - ${hit.why}`, "spansDetected", hit.value);
+      }
+      learn(hit.value, hit.kind);
+      for (const name of mrzNames(hit.value)) learn(name, "person_name");
+    }
+  }
+  const ordinary = blocks.filter((block) => block.crop.psm !== "mrz");
+
+  for (const block of ordinary) {
+    if (block.lines.length === 0) continue;
+    const lines = block.region
+      ? block.lines
+      : block.lines.map((line) => (inTree(line.text, treeText) ? { ...line, text: "" } : line));
+
+    // Detectors over the whole picture's text, so a label on one line is
+    // context for the value on the next. Scanned in a copy with OCR's
+    // commonest case slip repaired - the same length, so spans still index
+    // the original.
+    const joined = joinLines(lines);
+    const repaired = repairLabels(repairCase(joined.text));
+    for (const hit of await scanText(repaired.text)) {
+      if (!hit.span || !hit.value) continue;
+      const [from, to] = [repaired.from[hit.span[0]], repaired.from[hit.span[1] - 1] + 1];
+      for (const seg of joined.segments(from, to)) {
         emit(block, seg.line, seg.start, seg.end, hit.kind, hit.confidence,
           `read from image pixels by OCR - ${hit.why}`, "spansDetected", hit.value);
       }
@@ -693,16 +727,21 @@ export async function ocrScreenshot(args: {
       // number printed small, blurred or split elsewhere is still the number.
       // Only what was found with confidence, and long enough not to match
       // ordinary words - a mistake here would spread to every picture.
-      if ((hit.confidence === "certain" || hit.confidence === "high") &&
+      if ((hit.confidence === "certain" || hit.confidence === "high" || hit.kind === "bank_account") &&
           hit.value.replace(/[^\p{L}\p{N}]/gu, "").length >= 6) {
         learn(hit.value, hit.kind);
       }
+      // A passport's first machine-readable line spells out the holder's
+      // names. The printed "Surname" label is easy to misread ("Sumame"), the
+      // zone is built to be read - so the names are taken from it and looked
+      // for everywhere else.
+      if (hit.kind === "passport") for (const name of mrzNames(hit.value)) learn(name, "person_name");
     }
 
     // Identifiers the detectors could not see because OCR bent a character:
     // an S in a digit slot, an O where a zero must be.
-    for (let i = 0; i < block.lines.length; i++) {
-      const line = block.lines[i];
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
       for (const hit of correctIdentifiers(line.text, knownExact())) {
         emit(block, i, hit.start, hit.end, hit.kind, hit.proven ? "certain" : "high",
           hit.corrections === 0
@@ -714,10 +753,30 @@ export async function ocrScreenshot(args: {
     }
   }
 
+  // The name on a payment card has no label: it is the line of capitals on a
+  // picture that also holds a card number.
+  for (const block of ordinary) {
+    if (!block.region) continue;
+    const nodeId = block.region.node.id;
+    const hasCard = out.some((f) => f.kind === "payment_card" && f.nodeId === nodeId);
+    if (!hasCard) continue;
+    block.lines.forEach((line, i) => {
+      const text = line.text.trim();
+      if (!/^[\p{Lu}][\p{Lu}.'’ -]{3,40}$/u.test(text)) return;
+      if (/\b(VALID|THRU|THROUGH|BANK|DEBIT|CREDIT|CARD|PLATINUM|GOLD|SILVER|CLASSIC|SIGNATURE|WORLD|BUSINESS|VISA|MASTERCARD|RUPAY|MAESTRO|AMEX|EXPRESS|MEMBER|SINCE|INTERNATIONAL|ELECTRONIC|USE|ONLY)\b/u.test(text)) return;
+      const phrase = text.split(/\s+/).map((w) => w[0] + w.slice(1).toLowerCase()).join(" ");
+      if (!looksLikeNameCell(phrase)) return;
+      const start = line.text.indexOf(text);
+      emit(block, i, start, start + text.length, "person_name", "high",
+        "read from image pixels by OCR - the holder's name on a payment card", "spansDetected", text);
+      learn(text, "person_name");
+    });
+  }
+
   // A picture of a table - a screenshot of a spreadsheet, a class list, a
   // customer register - names nobody with a label of their own. The column
   // header is the label: whatever starts under "Name" is a name.
-  for (const block of blocks) {
+  for (const block of ordinary) {
     for (const { line: headerLine, word: header, text: headerText } of nameHeaders(block.lines)) {
       const height = Math.max(1, header.y1 - header.y0);
       const tolerance = height * 1.3;
@@ -757,7 +816,7 @@ export async function ocrScreenshot(args: {
 
   // And every value known by now - from the tree, or from any picture -
   // wherever any picture shows it, however OCR spelt it.
-  for (const block of blocks) {
+  for (const block of ordinary) {
     for (let i = 0; i < block.lines.length; i++) {
       const line = block.lines[i];
       for (const { kind, exact } of known.values()) {
@@ -771,6 +830,135 @@ export async function ocrScreenshot(args: {
 
   report.regionsReleased = release.size;
   return done({ findings: dedupe(out), release });
+}
+
+/**
+ * OCR's commonest case slip, repaired for scanning: a capital I read as a
+ * lower-case l (or a bar) at the start of a word that follows a capitalised
+ * one. "Meenakshi lyer" is "Meenakshi Iyer", and the name pattern - which
+ * wants capitals - stopped at the first word. One character for one, so every
+ * offset into the repair is an offset into what was read.
+ */
+export function repairCase(text: string): string {
+  return text.replace(/(?<=\p{Lu}[\p{L}'’.-]*[^\S\n]+)[l|](?=[a-z]{2,}\b)/gu, "I");
+}
+
+/**
+ * The surname and given names in a machine-readable zone's first line:
+ * "P<INDSHARMA<<AARAV<<<<" gives SHARMA and AARAV. OCR reads the filler as
+ * K or L as often as "<", so a separator is any short run of those between
+ * letters.
+ */
+export function mrzNames(line: string): string[] {
+  const m = line.replace(/\s/g, "").match(/^[PIVAC][A-Z<«KL]([A-Z]{3})(.+)$/);
+  if (!m) return [];
+  const names = m[2]
+    .replace(/[<«]([KL]?[<«])+/g, "<")
+    .replace(/[<«][KL]+$|[KL]{4,}.*$|[<«]+.*?$/, (tail) => (/[A-Z]{3,}/.test(tail.replace(/[KL<«]/g, "")) ? tail : ""))
+    .split(/[<«]+/)
+    .map((part) => part.replace(/[KL]{3,}$/, ""))
+    .filter((part) => /^[A-Z]{3,}$/.test(part));
+  return names;
+}
+
+/** Labels whose words introduce a value - and so must be read right. */
+const OCR_LABELS = [
+  "Surname", "Given", "Names", "Father's", "Mother's", "Husband's", "Spouse", "Holder", "Address",
+  "Elector's", "Applicant", "Nominee", "Guardian", "Beneficiary", "Customer", "Account", "Passport",
+  "Birth", "Signature",
+];
+
+/** Folds the letter shapes OCR merges or splits: rn/m, cl/d, vv/w, I/l/1. */
+function ocrFold(word: string): string {
+  return word.replace(/rn/g, "m").replace(/cl/g, "d").replace(/vv/g, "w").replace(/[il1|]/g, "i");
+}
+
+function editDistance(a: string, b: string): number {
+  const row = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    let diagonal = row[0];
+    row[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const above = row[j];
+      row[j] = Math.min(row[j] + 1, row[j - 1] + 1, diagonal + (a[i - 1] === b[j - 1] ? 0 : 1));
+      diagonal = above;
+    }
+  }
+  return row[b.length];
+}
+
+/**
+ * A label OCR misspelt, spelt right: "Surmame" and "Sumame" are "Surname".
+ * Every cue a detector knows is a word on a card, and OCR misreads the label
+ * as readily as the value - after which the value has no cue at all. Returns
+ * the repaired text and, for each of its characters, where it came from, so
+ * spans found in the repair map back to what was read.
+ */
+export function repairLabels(text: string): { text: string; from: number[] } {
+  let out = "";
+  const from: number[] = [];
+  let last = 0;
+  const copy = (end: number) => {
+    for (let i = last; i < end; i++) { out += text[i]; from.push(i); }
+    last = end;
+  };
+  for (const m of text.matchAll(/[\p{L}'’]{5,}/gu)) {
+    const word = m[0];
+    const at = m.index ?? 0;
+    const lower = word.toLowerCase().replace(/’/g, "'");
+    let best: string | undefined;
+    let bestDistance = Infinity;
+    for (const label of OCR_LABELS) {
+      const target = label.toLowerCase();
+      if (target === lower) { best = undefined; bestDistance = 0; break; }
+      if (target[0] !== lower[0] || Math.abs(target.length - lower.length) > 2) continue;
+      // Only the confusions OCR actually makes, and then one slip more.
+      // Plain edit distance let "Password" become "Passport" - two letters
+      // apart, and a different word.
+      const d = editDistance(ocrFold(lower), ocrFold(target));
+      if (d <= 1 && d < bestDistance) { best = label; bestDistance = d; }
+    }
+    if (!best) continue;
+    copy(at);
+    const cased = word === word.toUpperCase() ? best.toUpperCase() : best;
+    for (let i = 0; i < cased.length; i++) {
+      out += cased[i];
+      from.push(at + Math.min(i, word.length - 1));
+    }
+    last = at + word.length;
+  }
+  copy(text.length);
+  from.push(text.length);
+  return { text: out, from };
+}
+
+/** All the text the page tree holds, folded for comparison. */
+function pageText(dom: DomCapture): { all: string; whole: Set<string> } {
+  const parts: string[] = [];
+  const whole = new Set<string>();
+  for (const node of walkCapture(dom.root)) {
+    for (const value of [node.text, node.label, node.value]) {
+      if (!value) continue;
+      parts.push(value);
+      whole.add(fold(value));
+    }
+  }
+  return { all: fold(parts.join(" \n ")), whole };
+}
+
+function fold(text: string): string {
+  return text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+}
+
+/**
+ * Whether a line OCR read is text the tree already carries: a long run of it,
+ * or the whole of some element's text - a form label such as "PAN" or
+ * "Full name" is short, but it is a label the tree has, not something new.
+ */
+function inTree(line: string, tree: { all: string; whole: Set<string> }): boolean {
+  const folded = fold(line);
+  if (!folded) return false;
+  return tree.whole.has(folded) || (folded.length >= 12 && tree.all.includes(folded));
 }
 
 /**

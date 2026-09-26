@@ -128,7 +128,7 @@ const CASES: Case[] = [
     secrets: ["priya.sharma@okhdfcbank"],
   },
   {
-    id: "tilted", keep: ["exp 09/28"], as: "canvas", w: 520, h: 70, bg: "#ffffff", fg: "#111111",
+    id: "tilted", keep: ["Card", "exp"], as: "canvas", w: 520, h: 70, bg: "#ffffff", fg: "#111111",
     font: "20px Arial", lineH: 30, rotate: -3,
     lines: ["Card 4111 1111 1111 1111 exp 09/28"],
     secrets: ["4111 1111 1111 1111"],
@@ -373,7 +373,8 @@ async function run(): Promise<void> {
   const started = performance.now();
   stage("sanitize");
   const result = await sanitize({ dom, screenshot: shot }, new Vault(),
-    { burnUnverifiedRegions: true, aggressiveNames: false, ocr: mode }, undefined, engine);
+    // Full size: the audit judges the redaction, not what shrinking hides.
+    { burnUnverifiedRegions: true, aggressiveNames: false, ocr: mode, deliverMaxEdge: Infinity }, undefined, engine);
   const pipelineMs = Math.round(performance.now() - started);
 
   const redacted = result.screenshot?.dataUrl;

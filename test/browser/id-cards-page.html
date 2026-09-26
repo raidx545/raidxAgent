@@ -1,0 +1,468 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ID card test page</title>
+<style>
+  :root { --ink: #1c1f24; --muted: #6a6f78; --line: #d9dde3; --bg: #f6f7f9; }
+  * { box-sizing: border-box; }
+  body { font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; color: var(--ink); background: var(--bg); margin: 0; }
+  main { max-width: 980px; margin: 0 auto; padding: 32px 20px 80px; }
+  h1 { font-size: 24px; margin: 0 0 6px; }
+  .lede { color: var(--muted); margin: 0 0 28px; }
+  section { background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 18px 20px; margin: 0 0 22px; }
+  h2 { font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 0 0 12px; }
+  .row { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start; }
+  canvas, img, .bgcard { display: block; border-radius: 10px; box-shadow: 0 1px 3px rgba(0,0,0,.18); }
+  .expect { font-size: 13px; color: var(--muted); margin: 10px 0 0; }
+  .expect b { color: var(--ink); font-weight: 600; }
+  .keep { color: #1a7f37; }
+  form { display: grid; grid-template-columns: 170px 1fr; gap: 10px 14px; max-width: 560px; }
+  label { align-self: center; color: var(--muted); }
+  input { font: inherit; padding: 7px 10px; border: 1px solid var(--line); border-radius: 6px; }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+  th { color: var(--muted); font-weight: 600; }
+  dl { display: grid; grid-template-columns: 140px 1fr; gap: 6px 14px; margin: 0; }
+  dt { color: var(--muted); }
+  dd { margin: 0; }
+  .note { background: #fff8e1; border-color: #f0d98a; }
+</style>
+</head>
+<body>
+<main>
+<h1>VLESS ID card test page</h1>
+<p class="lede">
+  Every document below is a <b>specimen</b> with fictitious details, drawn into pixels so that only OCR can read it.
+  Numbers are generated to pass their real checksums (Verhoeff, Luhn, GSTIN mod-36), because the detectors check them.
+  Each section lists what must be covered and what must stay readable.
+</p>
+
+<section class="note">
+  <h2>How to use</h2>
+  <p style="margin:0">
+    Open this page, make sure Settings → "Read text in images (OCR)" is <b>Whole screenshot and every image</b>, and give
+    VLESS a task such as <i>"read the Aadhaar number and the PAN on this page"</i>. Then open the Wire log: every value
+    listed under <b>covered</b> must be a placeholder in the attached screenshot, and every value under
+    <span class="keep"><b>readable</b></span> must still be legible. The same value in a picture and in the page text must
+    carry the same placeholder.
+  </p>
+</section>
+
+<section>
+  <h2>1. Aadhaar card — front (&lt;canvas&gt;)</h2>
+  <canvas id="spec-1" width="640" height="400"></canvas>
+  <p class="expect">Covered: <b>name, date of birth, Aadhaar number, VID</b> ·
+    <span class="keep">Readable: "Government of India", "Male", "Aadhaar — Aam Aadmi ka Adhikar"</span></p>
+</section>
+
+<section>
+  <h2>2. Aadhaar card — back, address side (&lt;img&gt;)</h2>
+  <img id="spec-2" width="640" height="400" alt="">
+  <p class="expect">Covered: <b>S/O name, house and street, PIN code, Aadhaar number</b> ·
+    <span class="keep">Readable: "Address", "Unique Identification Authority of India"</span></p>
+</section>
+
+<section>
+  <h2>3. PAN card (&lt;img&gt;)</h2>
+  <img id="spec-3" width="640" height="400" alt="">
+  <p class="expect">Covered: <b>name, father's name, date of birth, PAN</b> ·
+    <span class="keep">Readable: "Income Tax Department", "Permanent Account Number Card"</span></p>
+</section>
+
+<section>
+  <h2>4. Voter ID and driving licence (&lt;canvas&gt; and CSS background)</h2>
+  <div class="row">
+    <canvas id="spec-4" width="460" height="290"></canvas>
+    <div id="spec-5" class="bgcard" style="width:460px;height:290px"></div>
+  </div>
+  <p class="expect">Covered: <b>EPIC number, elector's and father's names, licence number, holder's name, DOB</b> ·
+    <span class="keep">Readable: "Election Commission of India", "Driving Licence", "Valid Till"</span></p>
+</section>
+
+<section>
+  <h2>5. Passport data page with machine-readable zone (&lt;canvas&gt;)</h2>
+  <canvas id="spec-6" width="720" height="360"></canvas>
+  <p class="expect">Covered: <b>passport number, surname, given names, DOB, both MRZ lines</b> ·
+    <span class="keep">Readable: "Republic of India", "Nationality", "Place of Issue"</span></p>
+</section>
+
+<section>
+  <h2>6. Bank passbook and cheque (&lt;img&gt;)</h2>
+  <div class="row">
+    <img id="spec-7" width="460" height="300" alt="">
+    <img id="spec-8" width="700" height="300" alt="">
+  </div>
+  <p class="expect">Covered: <b>account holder, account number, IFSC, customer ID, mobile, payee, amount holder's account</b> ·
+    <span class="keep">Readable: "Savings Account", "Pay", "Rupees", "Branch"</span></p>
+</section>
+
+<section>
+  <h2>7. Credit card and GST invoice (&lt;canvas&gt; and &lt;img&gt;)</h2>
+  <div class="row">
+    <canvas id="spec-9" width="428" height="270"></canvas>
+    <img id="spec-10" width="480" height="270" alt="">
+  </div>
+  <p class="expect">Covered: <b>card number, cardholder name, GSTIN, email, phone, buyer's name</b> ·
+    <span class="keep">Readable: "Valid Thru", "Tax Invoice", "Total"</span></p>
+</section>
+
+<section>
+  <h2>8. A phone photo of a card — small, blurred, tilted (&lt;img&gt;)</h2>
+  <img id="spec-11" width="420" height="260" alt="">
+  <p class="expect">Covered: <b>Aadhaar number and name</b>, however badly photographed.</p>
+</section>
+
+<section>
+  <h2>9. The same values as page text — join-key checks</h2>
+  <form onsubmit="return false">
+    <label for="f-name">Full name</label><input id="f-name" autocomplete="name">
+    <label for="f-aadhaar">Aadhaar number</label><input id="f-aadhaar">
+    <label for="f-pan">PAN</label><input id="f-pan">
+    <label for="f-mobile">Mobile</label><input id="f-mobile" type="tel">
+  </form>
+  <p class="expect">These are filled with the same values the pictures show; each must carry the <b>same placeholder</b> as its picture.</p>
+</section>
+
+<section>
+  <h2>10. A customer table and a record — names with no label of their own</h2>
+  <table>
+    <thead><tr><th>Customer Name</th><th>Mobile</th><th>City</th><th>Status</th></tr></thead>
+    <tbody id="customers"></tbody>
+  </table>
+  <div style="height:16px"></div>
+  <dl>
+    <dt>Full name</dt><dd id="rec-name"></dd>
+    <dt>Email</dt><dd id="rec-email"></dd>
+    <dt>Status</dt><dd>Verified</dd>
+  </dl>
+  <p class="expect">Covered: <b>every name and mobile in the table, the record's name and email</b> ·
+    <span class="keep">Readable: cities, "Active", "Verified"</span></p>
+</section>
+
+<section>
+  <h2>11. A picture the page itself labels as an ID document (&lt;img alt="Aadhaar card upload"&gt;)</h2>
+  <img id="labelled" width="420" height="260" alt="Aadhaar card upload">
+  <p class="expect">By design this one is <b>blacked out whole</b>, not read: when the page says a picture is an identity
+    document, the photo, signature and QR code on it are as private as the text. The other pictures here have neutral
+    ids and alt text on purpose, so that OCR is what gets tested.</p>
+</section>
+
+<section>
+  <h2>12. Control — nothing here is private</h2>
+  <p>Our office is open Monday to Friday. Order #INV-7135-391841 shipped on 12 March. Reference 634795 5590 is a
+    tracking code, not a phone number. PIN code lookup is free. Call the toll-free helpline on 1800 180 1961.</p>
+  <p class="expect"><span class="keep">Readable: all of it.</span> A false positive here is a failure too.</p>
+</section>
+</main>
+
+<script>
+// ---------------------------------------------------------------- values
+//
+// Fictitious, and generated to pass the checksums real ones pass.
+
+function verhoeffDigit(payload) {
+  const d = [[0,1,2,3,4,5,6,7,8,9],[1,2,3,4,0,6,7,8,9,5],[2,3,4,0,1,7,8,9,5,6],[3,4,0,1,2,8,9,5,6,7],[4,0,1,2,3,9,5,6,7,8],
+    [5,9,8,7,6,0,4,3,2,1],[6,5,9,8,7,1,0,4,3,2],[7,6,5,9,8,2,1,0,4,3],[8,7,6,5,9,3,2,1,0,4],[9,8,7,6,5,4,3,2,1,0]];
+  const p = [[0,1,2,3,4,5,6,7,8,9],[1,5,7,6,2,8,3,0,9,4],[5,8,0,3,7,9,6,1,4,2],[8,9,1,6,0,4,3,5,2,7],[9,4,5,3,1,2,6,8,7,0],
+    [4,2,8,6,5,7,3,9,0,1],[2,7,9,3,8,0,6,4,1,5],[7,0,4,6,9,1,3,2,5,8]];
+  const inv = [0,4,3,2,1,5,6,7,8,9];
+  let c = 0;
+  const digits = payload.split("").reverse().map(Number);
+  for (let i = 0; i < digits.length; i++) c = d[c][p[(i + 1) % 8][digits[i]]];
+  return inv[c];
+}
+const group4 = (s) => s.replace(/(\d{4})(?=\d)/g, "$1 ");
+const AADHAAR = group4("48273619502" + verhoeffDigit("48273619502"));
+const VID = group4("914725836014703" + verhoeffDigit("914725836014703"));
+const AADHAAR_2 = group4("73518204696" + verhoeffDigit("73518204696"));
+
+const V = {
+  name: "Aarav Sharma", nameCaps: "AARAV SHARMA", father: "Rakesh Kumar Sharma", dob: "17/03/1994",
+  aadhaar: AADHAAR, vid: VID,
+  house: "Flat 12B, 44/1 Residency Road", locality: "Richmond Town, Bengaluru", state: "Karnataka", pin: "560025",
+  pan: "BQTPS4821K",
+  epic: "KRN4829163", elector: "Meenakshi Iyer", electorFather: "Venkatesh Iyer",
+  dl: "KA05 20150034871", dlName: "Rohit Nair", dlDob: "02/11/1989",
+  passport: "M4829163", surname: "SHARMA", given: "AARAV", passDob: "17/03/1994",
+  mrz1: "P<INDSHARMA<<AARAV<<<<<<<<<<<<<<<<<<<<<<<<<<",
+  mrz2: "M4829163<8IND9403176M3108256<<<<<<<<<<<<<<04",
+  holder: "Kavita Deshpande", account: "50100482917365", ifsc: "HDFC0001234", customerId: "84720193", mobile: "98452 17630",
+  payee: "Suresh Menon",
+  card: "5555 5555 5555 4444", cardName: "PRIYA RAGHAVAN", expiry: "08/29",
+  gstin: "27AAACR5055K1Z7", email: "accounts@shreeganesh-traders.in", phone: "+91 80 4127 6630", buyer: "Anil Kapoor",
+  photoName: "Nisha Verma", photoAadhaar: AADHAAR_2,
+};
+
+// ---------------------------------------------------------------- drawing
+
+function card(w, h, bg) {
+  const c = document.createElement("canvas");
+  c.width = w; c.height = h;
+  const x = c.getContext("2d");
+  x.fillStyle = bg; x.fillRect(0, 0, w, h);
+  return { c, x };
+}
+function text(x, s, px, py, font, color = "#1c1f24") {
+  x.font = font; x.fillStyle = color; x.textBaseline = "top"; x.fillText(s, px, py);
+}
+function specimen(x, w, h) {
+  x.save(); x.translate(w / 2, h / 2); x.rotate(-0.35);
+  x.font = "bold 54px Arial"; x.fillStyle = "rgba(200,0,0,0.10)"; x.textAlign = "center";
+  x.fillText("SPECIMEN", 0, 0); x.restore();
+}
+/** A face-shaped placeholder photo: head and shoulders, the way ID photos sit. */
+function photo(x, px, py, w, h) {
+  x.save(); x.beginPath(); x.rect(px, py, w, h); x.clip();
+  x.fillStyle = "#d9e2ec"; x.fillRect(px, py, w, h);
+  x.fillStyle = "#c68e62"; x.beginPath(); x.ellipse(px + w / 2, py + h * 0.38, w * 0.22, h * 0.24, 0, 0, 7); x.fill();
+  x.fillStyle = "#2d2d2d"; x.beginPath(); x.ellipse(px + w / 2, py + h * 0.2, w * 0.24, h * 0.1, 0, 0, 7); x.fill();
+  x.fillStyle = "#3b5b92"; x.beginPath(); x.ellipse(px + w / 2, py + h * 0.98, w * 0.45, h * 0.32, 0, 0, 7); x.fill();
+  x.restore();
+  x.strokeStyle = "#8a96a3"; x.strokeRect(px, py, w, h);
+}
+/** A QR-like block of modules. */
+function qr(x, px, py, size) {
+  const n = 25, m = size / n;
+  x.fillStyle = "#fff"; x.fillRect(px, py, size, size);
+  x.fillStyle = "#000";
+  let seed = 7;
+  for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) {
+    seed = (seed * 9301 + 49297) % 233280;
+    if (seed / 233280 > 0.52) x.fillRect(px + i * m, py + j * m, m, m);
+  }
+  for (const [a, b] of [[0, 0], [n - 7, 0], [0, n - 7]]) {
+    x.fillRect(px + a * m, py + b * m, 7 * m, 7 * m);
+    x.fillStyle = "#fff"; x.fillRect(px + (a + 1) * m, py + (b + 1) * m, 5 * m, 5 * m);
+    x.fillStyle = "#000"; x.fillRect(px + (a + 2) * m, py + (b + 2) * m, 3 * m, 3 * m);
+  }
+}
+function signature(x, px, py) {
+  x.strokeStyle = "#1f3a93"; x.lineWidth = 2; x.beginPath(); x.moveTo(px, py + 20);
+  for (let i = 0; i < 9; i++) x.quadraticCurveTo(px + i * 14 + 7, py + (i % 2 ? -4 : 30), px + i * 14 + 14, py + 14);
+  x.stroke();
+}
+function band(x, w, colors, h = 8) {
+  colors.forEach((c, i) => { x.fillStyle = c; x.fillRect(0, i * h, w, h); });
+}
+const toImg = (id, canvas) => { document.getElementById(id).src = canvas.toDataURL("image/png"); };
+const intoCanvas = (id, drawn) => {
+  const el = document.getElementById(id);
+  el.getContext("2d").drawImage(drawn, 0, 0, el.width, el.height);
+};
+
+// 1. Aadhaar front
+{
+  const { c, x } = card(640, 400, "#ffffff");
+  band(x, 640, ["#ff9933", "#ffffff", "#138808"], 10);
+  text(x, "Government of India", 150, 42, "bold 26px Arial");
+  photo(x, 30, 100, 140, 175);
+  text(x, V.name, 200, 110, "22px Arial");
+  text(x, "DOB: " + V.dob, 200, 146, "20px Arial");
+  text(x, "Male", 200, 180, "20px Arial");
+  text(x, V.aadhaar, 170, 300, "bold 36px Arial");
+  text(x, "VID : " + V.vid, 190, 345, "16px Arial", "#444");
+  text(x, "Aadhaar — Aam Aadmi ka Adhikar", 360, 376, "italic 14px Georgia", "#b03a2e");
+  specimen(x, 640, 400);
+  intoCanvas("spec-1", c);
+}
+
+// 2. Aadhaar back
+{
+  const { c, x } = card(640, 400, "#fbfbf7");
+  band(x, 640, ["#ff9933", "#ffffff", "#138808"], 10);
+  text(x, "Unique Identification Authority of India", 60, 40, "bold 22px Arial");
+  text(x, "Address:", 30, 100, "bold 19px Arial");
+  text(x, "S/O " + V.father + ",", 30, 132, "19px Arial");
+  text(x, V.house + ",", 30, 162, "19px Arial");
+  text(x, V.locality + ",", 30, 192, "19px Arial");
+  text(x, V.state + " - " + V.pin, 30, 222, "19px Arial");
+  qr(x, 470, 100, 140);
+  text(x, V.aadhaar, 170, 320, "bold 34px Arial");
+  specimen(x, 640, 400);
+  toImg("spec-2", c);
+}
+
+// 3. PAN card
+{
+  const { c, x } = card(640, 400, "#cfe7f5");
+  const g = x.createLinearGradient(0, 0, 640, 400); g.addColorStop(0, "#d7ecf8"); g.addColorStop(1, "#a9d3ee");
+  x.fillStyle = g; x.fillRect(0, 0, 640, 400);
+  text(x, "INCOME TAX DEPARTMENT", 30, 26, "bold 22px Arial", "#0b3d6b");
+  text(x, "GOVT. OF INDIA", 440, 26, "bold 18px Arial", "#0b3d6b");
+  text(x, "Permanent Account Number Card", 30, 62, "17px Arial", "#0b3d6b");
+  text(x, V.pan, 30, 96, "bold 30px 'Courier New', monospace");
+  photo(x, 470, 90, 130, 160);
+  text(x, "Name", 30, 150, "14px Arial", "#355");
+  text(x, V.nameCaps, 30, 170, "bold 21px Arial");
+  text(x, "Father's Name", 30, 212, "14px Arial", "#355");
+  text(x, V.father.toUpperCase(), 30, 232, "bold 21px Arial");
+  text(x, "Date of Birth", 30, 274, "14px Arial", "#355");
+  text(x, V.dob, 30, 294, "bold 21px Arial");
+  signature(x, 440, 300);
+  text(x, "Signature", 470, 350, "13px Arial", "#355");
+  specimen(x, 640, 400);
+  toImg("spec-3", c);
+}
+
+// 4a. Voter ID
+{
+  const { c, x } = card(460, 290, "#fdf3e7");
+  text(x, "ELECTION COMMISSION OF INDIA", 26, 18, "bold 18px Arial", "#7a2e0e");
+  text(x, "Elector Photo Identity Card", 90, 44, "15px Arial", "#7a2e0e");
+  text(x, V.epic, 150, 74, "bold 24px 'Courier New', monospace");
+  photo(x, 20, 70, 110, 135);
+  text(x, "Elector's Name : " + V.elector, 150, 118, "16px Arial");
+  text(x, "Father's Name : " + V.electorFather, 150, 150, "16px Arial");
+  text(x, "Sex : Female", 150, 182, "16px Arial");
+  text(x, "Date of Birth : 05/07/1991", 150, 214, "16px Arial");
+  specimen(x, 460, 290);
+  intoCanvas("spec-4", c);
+}
+
+// 4b. Driving licence, as a CSS background
+{
+  const { c, x } = card(460, 290, "#eef6ee");
+  band(x, 460, ["#1b5e20"], 34);
+  text(x, "INDIAN UNION DRIVING LICENCE", 20, 8, "bold 17px Arial", "#ffffff");
+  text(x, "Karnataka State Transport", 20, 44, "14px Arial", "#2e5e2e");
+  text(x, "DL No: " + V.dl, 20, 72, "bold 20px Arial");
+  photo(x, 340, 60, 100, 125);
+  text(x, "Name: " + V.dlName, 20, 110, "17px Arial");
+  text(x, "DOB: " + V.dlDob, 20, 140, "17px Arial");
+  text(x, "Valid Till: 01/11/2039", 20, 170, "17px Arial");
+  text(x, "Class: LMV, MCWG", 20, 200, "17px Arial");
+  specimen(x, 460, 290);
+  document.getElementById("spec-5").style.backgroundImage = `url(${c.toDataURL("image/png")})`;
+}
+
+// 5. Passport data page
+{
+  const { c, x } = card(720, 360, "#f5f0e1");
+  text(x, "REPUBLIC OF INDIA", 250, 16, "bold 20px Georgia", "#2b3a67");
+  photo(x, 24, 50, 130, 165);
+  const row = (label, value, px, py) => { text(x, label, px, py, "12px Arial", "#6b6b6b"); text(x, value, px, py + 15, "bold 17px Arial"); };
+  row("Type", "P", 180, 52); row("Country Code", "IND", 260, 52); row("Passport No.", V.passport, 400, 52);
+  row("Surname", V.surname, 180, 96); row("Given Name(s)", V.given, 180, 138);
+  row("Nationality", "INDIAN", 180, 180); row("Sex", "M", 330, 180); row("Date of Birth", V.passDob, 400, 180);
+  row("Place of Issue", "BENGALURU", 180, 222);
+  x.fillStyle = "#ffffff"; x.fillRect(0, 272, 720, 88);
+  text(x, V.mrz1, 18, 282, "20px 'Courier New', monospace");
+  text(x, V.mrz2, 18, 318, "20px 'Courier New', monospace");
+  specimen(x, 720, 272);
+  intoCanvas("spec-6", c);
+}
+
+// 6a. Passbook
+{
+  const { c, x } = card(460, 300, "#ffffff");
+  band(x, 460, ["#004c8f"], 44);
+  text(x, "HDFC BANK  ·  Savings Account", 18, 12, "bold 18px Arial", "#ffffff");
+  const kv = (k, v, py) => { text(x, k, 18, py, "15px Arial", "#555"); text(x, v, 190, py, "bold 15px Arial"); };
+  kv("Account Holder", V.holder, 64);
+  kv("Account No.", V.account, 96);
+  kv("IFSC", V.ifsc, 128);
+  kv("Customer ID", V.customerId, 160);
+  kv("Mobile", V.mobile, 192);
+  kv("Branch", "Jayanagar 4th Block", 224);
+  specimen(x, 460, 300);
+  toImg("spec-7", c);
+}
+
+// 6b. Cheque
+{
+  const { c, x } = card(700, 300, "#eaf4ec");
+  text(x, "HDFC BANK", 22, 16, "bold 20px Arial", "#004c8f");
+  text(x, "IFSC: " + V.ifsc, 22, 44, "14px Arial");
+  text(x, "Date  26/09/2026", 520, 20, "15px Arial");
+  text(x, "Pay  " + V.payee, 22, 90, "20px 'Brush Script MT', cursive");
+  x.strokeStyle = "#9aa"; x.beginPath(); x.moveTo(60, 116); x.lineTo(650, 116); x.stroke();
+  text(x, "Rupees  Twelve Thousand Five Hundred Only", 22, 130, "18px Georgia");
+  text(x, "₹ 12,500.00", 540, 170, "bold 18px Arial");
+  text(x, "A/c No. " + V.account, 22, 180, "16px Arial");
+  signature(x, 500, 220);
+  text(x, V.holder, 500, 262, "14px Arial");
+  text(x, "⑈" + "482917⑈ 560240003⑆ 000123⑈", 110, 272, "18px 'Courier New', monospace", "#222");
+  specimen(x, 700, 300);
+  toImg("spec-8", c);
+}
+
+// 7a. Credit card
+{
+  const { c, x } = card(428, 270, "#1a1a2e");
+  const g = x.createLinearGradient(0, 0, 428, 270); g.addColorStop(0, "#232946"); g.addColorStop(1, "#0f3460");
+  x.fillStyle = g; x.fillRect(0, 0, 428, 270);
+  x.fillStyle = "#d4af37"; x.fillRect(30, 80, 50, 38);
+  text(x, V.card, 30, 140, "bold 26px 'Courier New', monospace", "#f1f1f1");
+  text(x, "VALID THRU  " + V.expiry, 200, 184, "14px Arial", "#dcdcdc");
+  text(x, V.cardName, 30, 214, "bold 18px Arial", "#f1f1f1");
+  x.fillStyle = "#eb001b"; x.beginPath(); x.arc(350, 220, 22, 0, 7); x.fill();
+  x.fillStyle = "rgba(247,158,27,0.9)"; x.beginPath(); x.arc(376, 220, 22, 0, 7); x.fill();
+  intoCanvas("spec-9", c);
+}
+
+// 7b. GST invoice
+{
+  const { c, x } = card(480, 270, "#ffffff");
+  text(x, "TAX INVOICE", 170, 14, "bold 20px Arial");
+  text(x, "Shree Ganesh Traders", 18, 48, "bold 16px Arial");
+  text(x, "GSTIN: " + V.gstin, 18, 72, "15px Arial");
+  text(x, "Email: " + V.email, 18, 96, "15px Arial");
+  text(x, "Phone: " + V.phone, 18, 120, "15px Arial");
+  text(x, "Bill To: " + V.buyer, 18, 156, "bold 15px Arial");
+  text(x, "Office chairs x 4                    ₹ 18,400", 18, 190, "15px Arial");
+  text(x, "Total                                 ₹ 21,712", 18, 226, "bold 15px Arial");
+  specimen(x, 480, 270);
+  toImg("spec-10", c);
+}
+
+// 8. A phone photo of a card: small, soft, tilted, on a desk
+{
+  const { c: front, x } = card(420, 260, "#ffffff");
+  band(x, 420, ["#ff9933", "#ffffff", "#138808"], 7);
+  text(x, "Government of India", 110, 24, "bold 18px Arial");
+  photo(x, 16, 60, 90, 112);
+  text(x, V.photoName, 124, 70, "16px Arial");
+  text(x, "DOB: 21/06/2001", 124, 96, "15px Arial");
+  text(x, V.photoAadhaar, 110, 196, "bold 25px Arial");
+  const small = document.createElement("canvas"); small.width = 230; small.height = 142;
+  small.getContext("2d").drawImage(front, 0, 0, 230, 142);
+  const { c: desk, x: d } = card(420, 260, "#8d6e63");
+  d.save(); d.translate(210, 130); d.rotate(-0.07); d.imageSmoothingEnabled = true;
+  d.drawImage(small, -200, -122, 400, 244); d.restore();
+  toImg("spec-11", desk);
+}
+
+// 11. The same card as section 8, labelled by the page as an ID document.
+toImg("labelled", (() => {
+  const { c, x } = card(420, 260, "#ffffff");
+  band(x, 420, ["#ff9933", "#ffffff", "#138808"], 7);
+  text(x, "Government of India", 110, 24, "bold 18px Arial");
+  photo(x, 16, 60, 90, 112);
+  text(x, V.photoName, 124, 70, "16px Arial");
+  text(x, V.photoAadhaar, 110, 196, "bold 25px Arial");
+  specimen(x, 420, 260);
+  return c;
+})());
+
+// 9. The form, filled with the values the pictures show.
+document.getElementById("f-name").value = V.name;
+document.getElementById("f-aadhaar").value = V.aadhaar;
+document.getElementById("f-pan").value = V.pan;
+document.getElementById("f-mobile").value = V.mobile;
+
+// 10. A customer table and a record.
+document.getElementById("customers").innerHTML = [
+  ["Arjun Mehta", "98760 12345", "Pune", "Active"],
+  ["Neha Kapoor", "70112 23344", "Delhi", "Active"],
+  ["Farhan Qureshi", "91234 56780", "Lucknow", "Pending"],
+  ["Lakshmi Narayanan", "88990 01122", "Chennai", "Active"],
+].map((r) => `<tr>${r.map((v) => `<td>${v}</td>`).join("")}</tr>`).join("");
+document.getElementById("rec-name").textContent = V.holder;
+document.getElementById("rec-email").textContent = "kavita.deshpande@example.in";
+
+// The values, for a harness to check against. Not read by the extension.
+window.__SPECIMEN__ = V;
+</script>
+</body>
+</html>

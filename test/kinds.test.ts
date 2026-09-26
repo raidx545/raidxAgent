@@ -179,4 +179,56 @@ want(approx("Arjun Mehta", "Neha Kapoor").length === 0, "two different names mat
 want(approx("98765 43219", "98765 43210").length === 1 && approx("12345 67890", "98765 43210").length === 0,
   "the edit allowance is wrong: one digit off should match, an unrelated number should not");
 
+// ------------------------------------------ found on the ID card test page
+//
+// Each of these was readable in the image the extension sent for
+// dist/id-cards-page.html, or covered something that is not private.
+
+const { repairLabels, repairCase, mrzNames } = await import("../src/sanitize/ocr-screenshot");
+const { correctIdentifiers } = await import("../src/pii/ocr-correct");
+
+// OCR misreads a label as readily as a value, and a misread label is no cue.
+want(repairLabels("Surmame\nSHARMA").text === "Surname\nSHARMA", "a misread 'Surname' was not repaired");
+want(repairLabels("Sumame").text === "Surname", "'Sumame' was not repaired");
+want(repairLabels("Sunday").text === "Sunday", "an ordinary word was turned into a label");
+want(repairLabels("Password: Tiger@2024!").text === "Password: Tiger@2024!", "'Password' was repaired into another label");
+{
+  const r = repairLabels("x Sumame\nSHARMA");
+  const at = r.text.indexOf("SHARMA");
+  want(r.from[at] === "x Sumame\nSHARMA".indexOf("SHARMA"), "a repaired label moved the offsets of what follows it");
+}
+want(repairCase("Elector's Name : Meenakshi lyer") === "Elector's Name : Meenakshi Iyer", "an I read as l was not repaired");
+want(repairCase("hello lucky day") === "hello lucky day", "an l after a lower-case word was changed");
+
+// A passport's machine-readable zone names the holder, however OCR read the fillers.
+want(JSON.stringify(mrzNames("P<INDSHARMA<<AARAV<<<<<<<<<<<<<<<<<<<<<<<<<<")) === '["SHARMA","AARAV"]', "clean MRZ names were not parsed");
+want(JSON.stringify(mrzNames("P<INDSHARMA<K<AARAV<LLLLLLLLLLLLLLLLLLLLLLLLKL")) === '["SHARMA","AARAV"]',
+  `MRZ names with fillers read as K and L were not parsed: ${JSON.stringify(mrzNames("P<INDSHARMA<K<AARAV<LLLLLLLLLLLLLLLLLLLLLLLLKL"))}`);
+want(isMrzLine("P<INDSHARMA<K<AARAV<LLLLLLLLLLLLLLLLLLLLLLLLKL"), "an MRZ line with misread fillers was not recognised");
+want(isMrzLine("P<INDSHARMA<<AARAV<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<"), "an MRZ line a couple of fillers long was not recognised");
+
+// The name on an Aadhaar card has no label - it is the line above the birth date.
+await has("Government of India\nAarav Sharma\nDOB: 17/03/1994\nMale", "person_name", "Aarav Sharma");
+// A label is not a name: "Customer" is a cue, "ID" is the rest of the label.
+await lacks("Customer ID 84720193", "person_name");
+await has("Customer ID 84720193", "identity_field", "84720193");
+await lacks("holder's name, DOB, both MRZ lines", "person_name");
+// The whole address, label to PIN, not only its street line.
+{
+  const found = await kinds("Address:\nS/O Rakesh Sharma,\nFlat 12B, 44/1 Residency Road,\nRichmond Town, Bengaluru,\nKarnataka - 560025");
+  want(found.some((f) => f.startsWith("postal_address:") && f.includes("Richmond Town") && f.includes("560025")),
+    `the address block was not covered from label to PIN: ${found.join(" | ")}`);
+}
+// A PIN code needs a place or its own label - not the word "PIN" somewhere nearby.
+await lacks("Reference 634795 5590 is a tracking code. PIN code lookup is free.", "pincode");
+await has("PIN: 560025", "pincode", "560025");
+// "Elector" is a voter card's cue as much as "election" is.
+await has("Elector Photo Identity Card\nKRN4829163", "voter_id", "KRN4829163");
+// OCR's "A/c" is "Alc".
+await has("Alc No. 50100482917365", "bank_account", "50100482917365");
+// A card's expiry after its label.
+await has("VALID THRU 08/29", "payment_field", "08/29");
+// An amount is not an identifier, however its digits bend.
+want(!correctIdentifiers("Total 21,712").some((c) => c.kind === "pan"), "'Total 21,712' was corrected into a PAN");
+
 console.log(JSON.stringify({ failures: fails, pass: fails.length === 0 }, null, 2));
