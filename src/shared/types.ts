@@ -81,6 +81,8 @@ export interface ActionResult {
    * same split the transcript already makes between real values and tokens.
    */
   summary?: string;
+  /** For a "profile" request: what kind of page this is. */
+  profile?: import("../content/profile").PageProfile;
   /**
    * A fresh view of the page, populated when the action may have changed it.
    *
@@ -125,6 +127,8 @@ export type ContentRequest =
   | { kind: "fullpage-end" }
   /** Where on screen are these character spans? */
   | { kind: "span-rects"; requests: SpanRectRequest[] }
+  /** What kind of page this is - facts, not content - for the panel's suggestions. */
+  | { kind: "profile" }
   | { kind: "ping" };
 
 /** A rendered entry in the side panel transcript. */
@@ -136,6 +140,12 @@ export interface TranscriptEntry {
   action?: ActionName;
   /** Set while a step is still running. */
   pending?: boolean;
+  /**
+   * What a system line is about, so the panel can keep it quiet: "info" (the
+   * model in use, the user's usual site), "privacy" (what was protected
+   * before sending), "warning" (a protection that could not be applied).
+   */
+  tone?: "info" | "privacy" | "warning";
 }
 
 /** Service worker -> side panel events. */
@@ -170,6 +180,8 @@ export type PanelCommand =
   | { kind: "confirm-reply"; id: string; approved: boolean }
   | { kind: "question-reply"; id: string; answer: string }
   | { kind: "get-state" }
+  /** Tasks that fit the active tab, worked out locally. */
+  | { kind: "suggestions"; tabId?: number }
   /** Capture + PII scan of a tab. Standalone — does not involve the planner. */
   | { kind: "inspect"; tabId?: number; fullPage?: boolean }
   /** Mint every token one sanitization pass needs, in one round trip. */
@@ -219,11 +231,13 @@ export interface Settings {
    *              images. The text the DOM cannot see is in these.
    *   "full"   - the whole screenshot as well. Slower; catches text rendered
    *              in ways no detector anticipated.
-   *   "off"    - the tree's own text is the only text that is covered.
    *
-   * Only meaningful while screenshots are being sent.
+   * There is no "off". A screenshot whose pictures were never read carries
+   * whatever they show - a card number in a banner reached the model that way
+   * - so reading them is part of sending one. To skip OCR, stop sending
+   * screenshots.
    */
-  ocrMode: "off" | "images" | "full";
+  ocrMode: "images" | "full";
   /** Ask before click/type on anything that looks irreversible. */
   confirmRisky: boolean;
   /**
@@ -241,6 +255,18 @@ export interface Settings {
    * screen. Off by default in the agent loop, where it runs every step.
    */
   fullPageCapture: boolean;
+  /** Offer tasks that fit the page that is open, worked out in this browser. */
+  suggestForPage: boolean;
+  /**
+   * Remember which sites the user uses for flights, food, shopping and so on,
+   * and tell the agent to go there. Kept in this browser only.
+   */
+  rememberSites: boolean;
+  /**
+   * Also learn preferred sites from the user's own visits - only to a fixed
+   * list of known booking, shopping, mail and media sites, never anything else.
+   */
+  learnFromBrowsing: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -262,6 +288,9 @@ export const DEFAULT_SETTINGS: Settings = {
   confirmRisky: true,
   sendScreenshot: true,
   fullPageCapture: false,
+  suggestForPage: true,
+  rememberSites: true,
+  learnFromBrowsing: true,
 };
 
 /** The shape stored before multi-provider support landed. */
@@ -283,6 +312,10 @@ export function normaliseSettings(stored: unknown): Settings {
     apiKeys: { ...DEFAULT_SETTINGS.apiKeys, ...(raw.apiKeys ?? {}) },
     models: { ...DEFAULT_SETTINGS.models, ...(raw.models ?? {}) },
   };
+
+  // OCR can no longer be switched off while screenshots are sent; an install
+  // that had it off reads the whole screenshot from now on.
+  if (settings.ocrMode !== "images" && settings.ocrMode !== "full") settings.ocrMode = "full";
 
   // Pre-multi-provider installs stored a bare Anthropic key and model.
   if (raw.apiKey && !settings.apiKeys.anthropic) settings.apiKeys.anthropic = raw.apiKey;

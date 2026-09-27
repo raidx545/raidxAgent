@@ -255,6 +255,8 @@ export function taskPrompt(
   url: string,
   title: string,
   history: ReadonlyArray<{ task: string; answer: string }> = [],
+  /** The user's usual site for this kind of task, when they have one. */
+  preferences?: string,
 ): string {
   const earlier = history.slice(-HISTORY_TURNS);
   const recap =
@@ -271,6 +273,6 @@ export function taskPrompt(
         "\n\n";
 
   return `${recap}Current tab: ${title} — ${url}
-
+${preferences ? `\nUser preference: ${preferences}\n` : ""}
 Task: ${task}`;
 }

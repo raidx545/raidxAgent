@@ -59,6 +59,8 @@ export interface AgentDeps {
    * earlier answer still names the same thing now.
    */
   history?: TaskMemory[];
+  /** Where the user usually does this kind of task, as a sentence for the model. */
+  preferences?: string;
 }
 
 /**
@@ -125,7 +127,7 @@ export async function runTask(
   startTabId: number,
   deps: AgentDeps,
 ): Promise<string | undefined> {
-  const { settings, emit, askConfirm, askUser, signal, vault, history = [] } = deps;
+  const { settings, emit, askConfirm, askUser, signal, vault, history = [], preferences } = deps;
 
   const planner = createPlanner(settings);
   let controller = new TabController(startTabId);
@@ -136,7 +138,8 @@ export async function runTask(
     entry: {
       id: nextId(),
       role: "system",
-      text: `Using ${planner.label}. Page content is tokenized before it leaves this browser.`,
+      tone: "info",
+      text: `Using ${planner.label}`,
     },
   });
 
@@ -299,8 +302,8 @@ export async function runTask(
       role: "user",
       content:
         first
-          ? taskPrompt(tokenizedTask, first.dom.url, first.dom.title, history) + pageBlock(first.dom)
-          : taskPrompt(tokenizedTask, await sanitizeDetail(tab.url ?? "", vault), tab.title ?? "", history) +
+          ? taskPrompt(tokenizedTask, first.dom.url, first.dom.title, history, preferences) + pageBlock(first.dom)
+          : taskPrompt(tokenizedTask, await sanitizeDetail(tab.url ?? "", vault), tab.title ?? "", history, preferences) +
             await noPageBlock(unreadable ?? "", vault),
     },
   ];
@@ -829,47 +832,61 @@ function count(n: number, one: string, many = `${one}s`): string {
   return `${n} ${n === 1 ? one : many}`;
 }
 
+/**
+ * One quiet line for what was protected, and a line of its own for anything
+ * that could not be.
+ *
+ * It used to be one sentence of counts - "14 values tokenized · 1 image
+ * region destroyed · 14 text spans painted over in the screenshot · 50 values
+ * covered inside images" - on every task, with any warning buried at the end
+ * of it. The number that matters to a person is how much was kept private;
+ * the parts are for the wire log.
+ */
 function reportSanitization(capture: SanitizedCapture, emit: (e: AgentEvent) => void): void {
   const r = capture.report;
-  const swapped = r.tokenize.spansReplaced + r.tokenize.fieldsReplaced;
-  const bits = [`${count(swapped, "value")} tokenized`];
-  if (r.tokenize.fieldsSealed > 0) bits.push(`${r.tokenize.fieldsSealed} sealed`);
-  if (r.redact.regionsBurned > 0) {
-    bits.push(`${count(r.redact.regionsBurned, "image region")} destroyed`);
-  }
-  if (r.redact.textSpansCovered > 0) {
-    bits.push(`${count(r.redact.textSpansCovered, "text span")} painted over in the screenshot`);
-  }
+  const inText = r.tokenize.spansReplaced + r.tokenize.fieldsReplaced + r.tokenize.fieldsSealed;
   // Distinct values, not painted boxes: the same number read from a picture
   // and from a band of the whole screenshot is one value covered twice.
   const inImages = new Set(
     capture.findings.filter((f) => f.origin === "ocr" && f.value).map((f) => `${f.kind} ${f.value}`),
   ).size;
-  if (r.redact.ocrSpansCovered > 0 && inImages > 0) {
-    bits.push(`${count(inImages, "value")} covered inside images`);
-  }
-  // What OCR could not do has to be said. It used to fail in silence: the
-  // transcript read exactly the same whether every picture was read or none
-  // was, and a run that sent unread pictures looked like a clean one.
+  const pictures = r.redact.regionsBurned;
+
+  const parts: string[] = [];
+  if (inImages > 0) parts.push(`${inImages} inside images`);
+  if (pictures > 0) parts.push(`${count(pictures, "picture")} blacked out`);
+  const total = inText + inImages;
+  emit({
+    kind: "entry",
+    entry: {
+      id: nextId(),
+      role: "system",
+      tone: "privacy",
+      text: total + pictures === 0
+        ? "Nothing private found on this page"
+        : `Protected ${count(total, "private value")}` + (parts.length ? ` · ${parts.join(" · ")}` : ""),
+    },
+  });
+
+  // What could not be protected has to be said, on its own line. It used to
+  // fail in silence: a run that sent unread pictures looked like a clean one.
+  const warnings: string[] = [];
   const ocr = r.ocr;
   if (capture.screenshot && (!ocr || ocr.mode === "off")) {
-    // A screenshot is going to the model and nobody read the text in its
-    // pictures. That is a setting, not a failure - but it is exactly how a
-    // card number in a banner reaches the model, so it is said every time.
-    bits.push("⚠ text inside images was not checked - OCR is off in Settings, so pictures are sent as they are");
+    warnings.push("Text inside images was not checked, so pictures were sent as they are.");
   } else if (ocr?.error) {
-    bits.push(`⚠ text in images could not be read (${ocr.error}) - pictures were blacked out instead`);
-  } else if (ocr && ocr.mode !== "off" && !ocr.engine) {
-    bits.push("⚠ no OCR engine was available, so text inside images was not checked");
+    warnings.push(`Text in images could not be read (${ocr.error}); those pictures were blacked out instead.`);
+  } else if (ocr && !ocr.engine) {
+    warnings.push("No OCR engine was available, so text inside images was not checked.");
   } else if (ocr) {
     const unread = ocr.regionsFailed + ocr.regionsSkipped;
-    if (unread > 0) bits.push(`${count(unread, "image")} could not be read and ${unread === 1 ? "was" : "were"} blacked out`);
-    if (ocr.bandsFailed > 0) bits.push(`⚠ part of the screenshot could not be read for text`);
+    if (unread > 0) warnings.push(`${count(unread, "picture")} could not be read and ${unread === 1 ? "was" : "were"} blacked out.`);
+    if (ocr.bandsFailed > 0) warnings.push("Part of the screenshot could not be read for text.");
   }
-  if (r.residual.length > 0) {
-    bits.push(`⚠ ${count(r.residual.length, "finding")} survived sanitization`);
+  if (r.residual.length > 0) warnings.push(`${count(r.residual.length, "value")} may not have been protected.`);
+  for (const text of warnings) {
+    emit({ kind: "entry", entry: { id: nextId(), role: "system", tone: "warning", text } });
   }
-  emit({ kind: "entry", entry: { id: nextId(), role: "system", text: bits.join(" · ") } });
 }
 
 let lastWarned = "";

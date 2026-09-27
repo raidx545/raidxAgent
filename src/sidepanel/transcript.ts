@@ -49,6 +49,24 @@ interface Row {
   /** Steps keep their inner spans; replacing textContent would destroy them. */
   glyph?: HTMLElement;
   detail?: HTMLElement;
+  /** Where a note's words go, beside its icon. */
+  body?: HTMLElement;
+}
+
+/** Small line icons for notes, drawn rather than typed so they sit on the text's baseline. */
+const NOTE_ICONS: Record<NonNullable<TranscriptEntry["tone"]>, string> = {
+  info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>',
+  privacy: '<path d="M12 3l7 3v5c0 4.5-3 8.2-7 10-4-1.8-7-5.5-7-10V6l7-3z"/><path d="M9 12l2 2 4-4"/>',
+  warning: '<path d="M12 4l9 16H3L12 4z"/><path d="M12 10v4M12 17h.01"/>',
+};
+
+function noteIcon(tone: NonNullable<TranscriptEntry["tone"]>): SVGElement {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("aria-hidden", "true");
+  svg.setAttribute("class", "note-icon");
+  svg.innerHTML = NOTE_ICONS[tone];
+  return svg;
 }
 
 export interface PatchOptions {
@@ -111,6 +129,8 @@ export class TranscriptView {
         row.detail!.textContent = options.text;
       } else if (row.role === "assistant" && !options.replace) {
         row.el.textContent = (row.el.textContent ?? "") + options.text;
+      } else if (row.body) {
+        row.body.textContent = options.text;
       } else {
         row.el.textContent = options.text;
       }
@@ -142,6 +162,15 @@ export class TranscriptView {
       row.detail = detail;
       this.appendStep(el);
     } else {
+      if (entry.role === "system" || entry.role === "error") {
+        // A note: one quiet line with an icon that says what kind of note it is.
+        const tone = entry.tone ?? (entry.role === "error" ? "warning" : "info");
+        el.classList.add("note", `tone-${tone}`);
+        const body = document.createElement("span");
+        body.className = "note-body";
+        el.append(noteIcon(tone), body);
+        row.body = body;
+      }
       // Anything that is not a step ends the current run of steps.
       this.closeGroup();
       this.container.appendChild(el);
@@ -155,6 +184,8 @@ export class TranscriptView {
     if (row.role === "step") {
       row.glyph!.textContent = GLYPHS[entry.action ?? ""] ?? "•";
       row.detail!.textContent = entry.text;
+    } else if (row.body) {
+      row.body.textContent = entry.text;
     } else {
       row.el.textContent = entry.text;
     }

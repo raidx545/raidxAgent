@@ -115,6 +115,12 @@ export class TabController {
   }
 
   /** The PII layer's structured capture. Read-only, no model involved. */
+  /** What kind of page this is, for suggestions. Undefined when it cannot be asked. */
+  async profile(): Promise<ActionResult["profile"]> {
+    const result = await this.send({ kind: "profile" }).catch(() => undefined);
+    return result?.profile;
+  }
+
   async captureDom(): Promise<DomCapture | undefined> {
     const result = await this.send({ kind: "capture" }).catch(() => undefined);
     return result?.capture;

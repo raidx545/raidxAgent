@@ -9,57 +9,83 @@
   <body>
     <header class="bar">
       <div class="brand">
-        <span class="dot" id="status-dot"></span>
+        <span class="dot" id="status-dot" aria-hidden="true"></span>
         <strong>VLESS</strong>
         <span class="progress" id="progress" aria-live="polite"></span>
       </div>
       <div class="bar-actions">
-        <button id="new-task" class="ghost" title="Clear the transcript">New</button>
-        <button id="inspect" class="ghost" title="Capture and scan this page for PII">PII scan</button>
-        <button id="wire" class="ghost" title="See exactly what was sent to the model">Wire log</button>
-        <button id="settings" class="ghost" title="Open options">Settings</button>
+        <button id="new-task" class="icon-btn" type="button" aria-label="New task" title="New task">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+        </button>
+        <div class="menu-wrap">
+          <button id="menu-btn" class="icon-btn" type="button" aria-label="More" title="More"
+                  aria-haspopup="menu" aria-expanded="false" aria-controls="menu">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="19" cy="12" r="1.3"/></svg>
+          </button>
+          <div id="menu" class="menu hidden" role="menu">
+            <button id="inspect" role="menuitem" type="button">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7 3v5c0 4.5-3 8.2-7 10-4-1.8-7-5.5-7-10V6l7-3z"/></svg>
+              <span>Check page for private data</span>
+            </button>
+            <button id="wire" role="menuitem" type="button">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10"/></svg>
+              <span>What was sent to the model</span>
+            </button>
+            <button id="settings" role="menuitem" type="button">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+              <span>Settings</span>
+            </button>
+          </div>
+        </div>
       </div>
     </header>
 
     <main id="transcript" class="transcript" aria-live="polite" aria-relevant="additions text">
-      <div class="empty" id="empty">
-        <h2>What should I do?</h2>
-        <p>I work in the tab you have open. Tell me a goal, not a click.</p>
-        <ul class="examples">
-          <li data-example="Summarise this page in five bullet points.">Summarise this page in five bullet points</li>
-          <li data-example="Find the pricing page on this site and tell me the cheapest paid plan.">Find the cheapest paid plan on this site</li>
-          <li data-example="Search Hacker News for posts about browser agents from the last month and list the top five.">Search Hacker News for browser-agent posts</li>
-        </ul>
-      </div>
+      <section class="empty" id="empty" aria-labelledby="empty-title">
+        <div class="context" id="context">
+          <span class="site-badge" id="site-badge" aria-hidden="true"></span>
+          <span class="site-text">
+            <span class="site-host" id="site-host">This page</span>
+            <span class="site-kind" id="site-kind"></span>
+          </span>
+        </div>
+        <h2 id="empty-title">What should I do here?</h2>
+        <p class="lede">Describe a goal, not a click. Private details are replaced with placeholders before anything leaves this browser.</p>
+        <div class="suggestions" id="suggestions" role="list" aria-label="Suggested tasks"></div>
+      </section>
     </main>
 
-    <button id="jump" class="jump hidden" type="button">Jump to latest ↓</button>
+    <button id="jump" class="jump hidden" type="button">Jump to latest</button>
 
-    <div id="confirm" class="confirm hidden">
-      <p id="confirm-text"></p>
-      <div class="confirm-actions">
-        <button id="confirm-no" class="ghost">Cancel</button>
-        <button id="confirm-yes" class="primary">Allow</button>
+    <div id="confirm" class="sheet hidden" role="dialog" aria-labelledby="confirm-title" aria-describedby="confirm-text">
+      <p class="sheet-title" id="confirm-title">Allow this action?</p>
+      <p class="sheet-text" id="confirm-text"></p>
+      <div class="sheet-actions">
+        <button id="confirm-no" class="secondary" type="button">Cancel</button>
+        <button id="confirm-yes" class="primary" type="button">Allow</button>
       </div>
     </div>
 
-    <div id="question" class="confirm hidden">
-      <p id="question-text"></p>
-      <textarea id="question-input" rows="2" placeholder="Your answer…  (Enter to send)"></textarea>
-      <div class="confirm-actions">
-        <button id="question-skip" class="ghost">Skip</button>
-        <button id="question-send" class="primary">Answer</button>
+    <div id="question" class="sheet hidden" role="dialog" aria-labelledby="question-title" aria-describedby="question-text">
+      <p class="sheet-title" id="question-title">VLESS needs your answer</p>
+      <p class="sheet-text" id="question-text"></p>
+      <textarea id="question-input" rows="2" placeholder="Your answer" aria-label="Your answer"></textarea>
+      <div class="sheet-actions">
+        <button id="question-skip" class="secondary" type="button">Skip</button>
+        <button id="question-send" class="primary" type="button">Answer</button>
       </div>
     </div>
 
     <form id="composer" class="composer">
-      <textarea
-        id="input"
-        rows="2"
-        placeholder="Give me a task…  (Enter to send, Shift+Enter for a new line)"
-      ></textarea>
-      <button id="send" type="submit" class="primary">Run</button>
-      <button id="stop" type="button" class="danger hidden">Stop</button>
+      <div class="composer-box">
+        <textarea id="input" rows="1" aria-label="Task" placeholder="Ask VLESS to do something…"></textarea>
+        <button id="send" type="submit" class="send" aria-label="Run task" title="Run (Enter)">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+        </button>
+        <button id="stop" type="button" class="send stop hidden" aria-label="Stop" title="Stop">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1.5"/></svg>
+        </button>
+      </div>
     </form>
 
     <script type="module" src="sidepanel.js"></script>

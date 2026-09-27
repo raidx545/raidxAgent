@@ -9,7 +9,12 @@ import { runTask, type TaskMemory } from "./agent";
 import { captureTab } from "./inspect";
 import { RemoteVault } from "../vault/remote";
 import { wireRecords, clearWire } from "./wirelog";
-import { TabController } from "./executor";
+import { TabController, isRestricted } from "./executor";
+import {
+  CATEGORY_LABEL, categoriesOfHost, classifyTask, loadPrefs, preferenceHint, preferredSites,
+  recordUse, siteOf, updatePrefs,
+} from "../shared/prefs";
+import { siteKind, suggestionsFor } from "../shared/suggest";
 
 // The side panel can be closed and reopened mid-run, so the transcript lives
 // here rather than in the panel's own memory.
@@ -158,6 +163,12 @@ function askUser(id: string, question: string): Promise<string | undefined> {
   });
 }
 
+/**
+ * Sites loaded while a task runs, in order - where the task went, so that a
+ * finished task can teach which site the user uses for that kind of thing.
+ */
+let runHosts: string[] = [];
+
 async function start(task: string, tabId: number): Promise<void> {
   if (running) return;
 
@@ -168,13 +179,36 @@ async function start(task: string, tabId: number): Promise<void> {
   emit({ kind: "status", running: true });
   emit({ kind: "entry", entry: { id: `u-${Date.now()}`, role: "user", text: task } });
 
+  const startHost = siteOf((await chrome.tabs.get(tabId).catch(() => undefined))?.url ?? "");
+  runHosts = startHost ? [startHost] : [];
+
+  // The user's usual site for this kind of task, if they have one and want
+  // it used. The agent is told; the user is shown what it was told.
+  let preferences: string | undefined;
+  const category = classifyTask(task);
+  if (settings.rememberSites && category) {
+    const prefs = await loadPrefs();
+    preferences = preferenceHint(prefs, task);
+    const usual = preferredSites(prefs, category, 1)[0];
+    if (preferences && usual) {
+      emit({
+        kind: "entry",
+        entry: {
+          id: `pref-${Date.now()}`, role: "system", tone: "info",
+          text: `Your usual site for ${CATEGORY_LABEL[category].toLowerCase()}: ${usual.host}`,
+        },
+      });
+    }
+  }
+
   try {
     const answer = await runTask(task, tabId, {
-      settings, emit, askConfirm, askUser, signal: abort.signal, vault, history,
+      settings, emit, askConfirm, askUser, signal: abort.signal, vault, history, preferences,
     });
     if (answer) {
       history.push({ task, answer });
       if (history.length > HISTORY_LIMIT) history = history.slice(-HISTORY_LIMIT);
+      if (settings.rememberSites && category) await learnFromTask(category);
     }
   } catch (error) {
     emit({
@@ -199,9 +233,68 @@ async function start(task: string, tabId: number): Promise<void> {
   }
 }
 
+/**
+ * A finished task teaches where that kind of task is done: the site it
+ * finished on, and any known site for that kind it passed through - not the
+ * search engine it started from.
+ */
+async function learnFromTask(category: NonNullable<ReturnType<typeof classifyTask>>): Promise<void> {
+  const finished = runHosts[runHosts.length - 1];
+  const hosts = [...new Set(runHosts)].filter(
+    (host) => host === finished || categoriesOfHost(host).includes(category),
+  );
+  const now = Date.now();
+  await updatePrefs((prefs) => hosts.reduce((p, host) => recordUse(p, host, "task", now, category), prefs));
+}
+
+// The user's own visits, to known booking, shopping, mail and media sites only,
+// when they have allowed it. Pages the agent loads while working are the
+// task's, not a visit.
+chrome.tabs.onUpdated.addListener((_tabId, info, tab) => {
+  if (info.status !== "complete" || !tab.url) return;
+  const host = siteOf(tab.url);
+  if (!host) return;
+  if (running) {
+    runHosts.push(host);
+    return;
+  }
+  if (categoriesOfHost(host).length === 0) return;
+  void (async () => {
+    const settings = await loadSettings();
+    if (!settings.rememberSites || !settings.learnFromBrowsing) return;
+    await updatePrefs((prefs) => recordUse(prefs, host, "visit", Date.now()));
+  })();
+});
+
+/** Tasks that fit a tab, worked out here from facts about the page. */
+async function suggestFor(tabId?: number): Promise<unknown> {
+  const settings = await loadSettings();
+  const tab = tabId
+    ? await chrome.tabs.get(tabId).catch(() => undefined)
+    : (await chrome.tabs.query({ active: true, lastFocusedWindow: true }))[0];
+  const host = tab?.url && !isRestricted(tab.url) ? siteOf(tab.url) : undefined;
+  const base = { host, kind: siteKind(host), enabled: settings.suggestForPage };
+  if (!settings.suggestForPage) return { ...base, suggestions: [] };
+
+  const prefs = settings.rememberSites ? await loadPrefs() : undefined;
+  let profile;
+  if (host && tab?.id) {
+    // A page that will not answer quickly gets suggestions from its site alone.
+    profile = await Promise.race([
+      new TabController(tab.id).profile().catch(() => undefined),
+      new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), 1500)),
+    ]);
+  }
+  return { ...base, suggestions: suggestionsFor({ host, profile }, prefs) };
+}
+
 chrome.runtime.onMessage.addListener(
   (command: PanelCommand, _sender, sendResponse: (r: unknown) => void) => {
     switch (command.kind) {
+      case "suggestions":
+        void suggestFor(command.tabId).then(sendResponse, () => sendResponse({ enabled: false, suggestions: [] }));
+        return true;
+
       case "run":
         void start(command.task, command.tabId);
         sendResponse({ ok: true });

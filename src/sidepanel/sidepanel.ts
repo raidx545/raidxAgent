@@ -1,4 +1,5 @@
 import type { AgentEvent, PanelCommand, TranscriptEntry } from "../shared/types";
+import type { Suggestion } from "../shared/suggest";
 import { TranscriptView } from "./transcript";
 
 const $ = <T extends HTMLElement>(id: string): T =>
@@ -72,6 +73,13 @@ function setRunning(running: boolean): void {
   sendBtn.classList.toggle("hidden", running);
   stopBtn.classList.toggle("hidden", !running);
   inputEl.disabled = running;
+  inputEl.placeholder = running ? "Working… press stop to cancel" : "Ask VLESS to do something…";
+  syncSend();
+}
+
+/** Run is only offered when there is something to run. */
+function syncSend(): void {
+  sendBtn.disabled = inputEl.value.trim().length === 0;
 }
 
 chrome.runtime.onMessage.addListener((event: AgentEvent) => {
@@ -153,6 +161,7 @@ async function submit(): Promise<void> {
 
   inputEl.value = "";
   inputEl.style.height = "auto";
+  syncSend();
   await send({ kind: "run", task, tabId: tab.id });
 }
 
@@ -170,6 +179,8 @@ $("new-task").addEventListener("click", () => {
   emptyEl.classList.remove("hidden");
   jumpBtn.classList.add("hidden");
   setRunning(false);
+  void loadSuggestions();
+  inputEl.focus();
 });
 
 jumpBtn.addEventListener("click", () => {
@@ -182,16 +193,95 @@ transcriptEl.addEventListener("scroll", () => {
   if (atBottom()) jumpBtn.classList.add("hidden");
 });
 
-$("settings").addEventListener("click", () => chrome.runtime.openOptionsPage());
+// ---------------------------------------------------------------- the menu
+//
+// Three things most people open rarely - the privacy check, the wire log and
+// settings - sat as four text buttons across a narrow header. They live
+// behind one button now, and the header shows only what is used every task.
 
-// Exactly what left this browser, with a PII verdict per turn.
-$("wire").addEventListener("click", () => {
-  void chrome.tabs.create({ url: chrome.runtime.getURL("wirelog.html") });
+const menuBtn = $<HTMLButtonElement>("menu-btn");
+const menuEl = $("menu");
+
+function setMenu(open: boolean): void {
+  menuEl.classList.toggle("hidden", !open);
+  menuBtn.setAttribute("aria-expanded", String(open));
+  if (open) menuEl.querySelector<HTMLButtonElement>("button")?.focus();
+}
+menuBtn.addEventListener("click", () => setMenu(menuEl.classList.contains("hidden")));
+document.addEventListener("click", (event) => {
+  if (!menuEl.classList.contains("hidden") && !(event.target as Element).closest(".menu-wrap")) setMenu(false);
+});
+menuEl.addEventListener("keydown", (event) => {
+  const items = [...menuEl.querySelectorAll<HTMLButtonElement>("button")];
+  const at = items.indexOf(document.activeElement as HTMLButtonElement);
+  if (event.key === "Escape") { setMenu(false); menuBtn.focus(); }
+  else if (event.key === "ArrowDown") { event.preventDefault(); items[(at + 1) % items.length].focus(); }
+  else if (event.key === "ArrowUp") { event.preventDefault(); items[(at - 1 + items.length) % items.length].focus(); }
 });
 
+const openPage = (path: string) => { setMenu(false); void chrome.tabs.create({ url: chrome.runtime.getURL(path) }); };
+$("settings").addEventListener("click", () => { setMenu(false); void chrome.runtime.openOptionsPage(); });
+// Exactly what left this browser, with a PII verdict per turn.
+$("wire").addEventListener("click", () => openPage("wirelog.html"));
 // The capture + PII layer runs standalone; it does not involve the planner.
-$("inspect").addEventListener("click", () => {
-  void chrome.tabs.create({ url: chrome.runtime.getURL("inspector.html") });
+$("inspect").addEventListener("click", () => openPage("inspector.html"));
+
+// ----------------------------------------------------------- suggestions
+//
+// Tasks that fit the page that is open, worked out in the browser from what
+// kind of page it is. Picking one fills the composer - it does not run - so it
+// can be finished or changed first.
+
+const suggestionsEl = $("suggestions");
+const siteHost = $("site-host");
+const siteKind = $("site-kind");
+const siteBadge = $("site-badge");
+const emptyTitle = $("empty-title");
+
+interface SuggestionsReply { host?: string; kind?: string; enabled: boolean; suggestions: Suggestion[] }
+
+let suggestionRequest = 0;
+
+async function loadSuggestions(): Promise<void> {
+  if (emptyEl.classList.contains("hidden")) return;
+  const request = ++suggestionRequest;
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  suggestionsEl.innerHTML = '<div class="suggestions-loading"></div><div class="suggestions-loading"></div>';
+  const reply = (await send({ kind: "suggestions", tabId: tab?.id })) as SuggestionsReply | undefined;
+  if (request !== suggestionRequest) return;
+
+  const host = reply?.host;
+  siteHost.textContent = host ?? "New tab";
+  siteKind.textContent = reply?.kind ?? "";
+  siteBadge.textContent = (host ?? "").replace(/^(m|app|mail|web)\./, "").charAt(0);
+  siteBadge.hidden = !host;
+  emptyTitle.textContent = host ? "What should I do here?" : "What can I do for you?";
+
+  suggestionsEl.innerHTML = "";
+  if (!reply?.enabled) return;
+  for (const suggestion of reply.suggestions) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "suggestion";
+    button.setAttribute("role", "listitem");
+    const label = document.createElement("span");
+    label.textContent = suggestion.label;
+    button.append(label);
+    button.insertAdjacentHTML("beforeend", '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>');
+    button.addEventListener("click", () => {
+      inputEl.value = suggestion.prompt;
+      inputEl.dispatchEvent(new Event("input"));
+      inputEl.focus();
+      inputEl.setSelectionRange(inputEl.value.length, inputEl.value.length);
+    });
+    suggestionsEl.appendChild(button);
+  }
+}
+
+// The page changes under the panel: another tab, or this one navigating.
+chrome.tabs.onActivated.addListener(() => void loadSuggestions());
+chrome.tabs.onUpdated.addListener((_id, info, tab) => {
+  if (info.status === "complete" && tab.active) void loadSuggestions();
 });
 
 inputEl.addEventListener("keydown", (event) => {
@@ -205,14 +295,9 @@ inputEl.addEventListener("keydown", (event) => {
 inputEl.addEventListener("input", () => {
   inputEl.style.height = "auto";
   inputEl.style.height = `${inputEl.scrollHeight}px`;
+  syncSend();
 });
-
-document.querySelectorAll<HTMLElement>("[data-example]").forEach((el) => {
-  el.addEventListener("click", () => {
-    inputEl.value = el.dataset.example ?? "";
-    inputEl.focus();
-  });
-});
+syncSend();
 
 // The panel can be reopened mid-run — rebuild from the worker's transcript.
 void (async () => {
@@ -224,8 +309,12 @@ void (async () => {
         pendingQuestion?: { id: string; question: string };
       }
     | undefined;
-  if (!state) return;
+  if (!state) {
+    void loadSuggestions();
+    return;
+  }
   state.transcript.forEach(render);
+  if (state.transcript.length === 0) void loadSuggestions();
   setRunning(state.running);
 
   // A question asked while this panel was closed is still waiting. Without

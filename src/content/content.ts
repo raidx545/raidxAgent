@@ -4,6 +4,7 @@ import { captureDom } from "../capture/dom";
 import { begin, scrollTo, end } from "../capture/fullpage";
 import { spanRects } from "../capture/spans";
 import { settle } from "./settle";
+import { profilePage } from "./profile";
 
 /**
  * The page-side half of the agent. It owns the only code that reads or touches
@@ -48,6 +49,10 @@ chrome.runtime.onMessage.addListener(
 
       case "span-rects":
         sendResponse({ ok: true, detail: "rects", rects: spanRects(request.requests) });
+        return false;
+
+      case "profile":
+        sendResponse({ ok: true, detail: "profile", profile: profilePage() } satisfies ActionResult);
         return false;
 
       case "act":

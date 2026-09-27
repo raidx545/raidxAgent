@@ -2,6 +2,10 @@ import type { ProviderId } from "../background/providers/types";
 import type { Settings } from "../shared/types";
 import { normaliseSettings } from "../shared/types";
 import { PROVIDERS, PROVIDER_IDS, listModels } from "../shared/models";
+import {
+  CATEGORY_LABEL, loadPrefs, preferredSites, savePrefs, siteOf, updatePrefs,
+  type SiteCategory, type SitePrefs,
+} from "../shared/prefs";
 
 const $ = <T extends HTMLElement>(id: string): T =>
   document.getElementById(id) as T;
@@ -21,6 +25,13 @@ const ocrEl = $<HTMLSelectElement>("ocrMode");
 const confirmRiskyEl = $<HTMLInputElement>("confirmRisky");
 const sendScreenshotEl = $<HTMLInputElement>("sendScreenshot");
 const fullPageCaptureEl = $<HTMLInputElement>("fullPageCapture");
+const suggestEl = $<HTMLInputElement>("suggestForPage");
+const rememberEl = $<HTMLInputElement>("rememberSites");
+const learnEl = $<HTMLInputElement>("learnFromBrowsing");
+const ocrRow = $("ocr-row");
+const sitesEl = $("sites");
+const pinCategory = $<HTMLSelectElement>("pin-category");
+const pinHost = $<HTMLInputElement>("pin-host");
 const refreshBtn = $<HTMLButtonElement>("refresh-models");
 const savedEl = $("saved");
 
@@ -85,9 +96,125 @@ function render(): void {
   confirmRiskyEl.checked = settings.confirmRisky;
   sendScreenshotEl.checked = settings.sendScreenshot;
   fullPageCaptureEl.checked = settings.fullPageCapture;
+  suggestEl.checked = settings.suggestForPage;
+  rememberEl.checked = settings.rememberSites;
+  learnEl.checked = settings.learnFromBrowsing;
+  syncDependents();
 
   renderModelOptions();
 }
+
+/** Settings that mean nothing while their parent is off are shown as such. */
+function syncDependents(): void {
+  ocrRow.style.opacity = sendScreenshotEl.checked ? "" : ".5";
+  ocrEl.disabled = !sendScreenshotEl.checked;
+  learnEl.disabled = !rememberEl.checked;
+}
+sendScreenshotEl.addEventListener("change", syncDependents);
+rememberEl.addEventListener("change", syncDependents);
+
+// ------------------------------------------------------- preferred websites
+//
+// Saved as they are changed - they are the user's own record, not a setting
+// that needs a key to be valid - and shown per kind of task, the pinned site
+// first.
+
+const CATEGORIES = Object.keys(CATEGORY_LABEL) as SiteCategory[];
+for (const category of CATEGORIES) {
+  const option = document.createElement("option");
+  option.value = category;
+  option.textContent = CATEGORY_LABEL[category];
+  pinCategory.appendChild(option);
+}
+
+function renderSites(prefs: SitePrefs): void {
+  sitesEl.innerHTML = "";
+  const rows = CATEGORIES
+    .map((category) => ({ category, sites: preferredSites(prefs, category, 6) }))
+    .filter((row) => row.sites.length > 0);
+
+  if (rows.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "empty-sites";
+    empty.textContent = "No preferred websites yet. They appear here as you finish tasks, or set one below.";
+    sitesEl.appendChild(empty);
+    return;
+  }
+
+  for (const { category, sites } of rows) {
+    const row = document.createElement("div");
+    row.className = "site-row";
+    const name = document.createElement("div");
+    name.className = "site-cat";
+    name.textContent = CATEGORY_LABEL[category];
+    const chips = document.createElement("div");
+    chips.className = "chips";
+
+    for (const site of sites) {
+      const chip = document.createElement("span");
+      chip.className = `chip${site.pinned ? " pinned" : ""}`;
+      const host = document.createElement("span");
+      host.textContent = site.host;
+      chip.appendChild(host);
+      const uses = site.tasks + site.visits;
+      if (!site.pinned && uses > 0) {
+        const count = document.createElement("span");
+        count.className = "count";
+        count.textContent = `×${uses}`;
+        count.title = `${site.tasks} task(s), ${site.visits} visit(s)`;
+        chip.appendChild(count);
+      }
+      if (!site.pinned) {
+        const pin = document.createElement("button");
+        pin.type = "button";
+        pin.textContent = "Prefer";
+        pin.setAttribute("aria-label", `Prefer ${site.host} for ${CATEGORY_LABEL[category]}`);
+        pin.addEventListener("click", () => void change((p) => ({ ...p, pinned: { ...p.pinned, [category]: site.host } })));
+        chip.appendChild(pin);
+      }
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.textContent = "✕";
+      remove.setAttribute("aria-label", `Remove ${site.host} from ${CATEGORY_LABEL[category]}`);
+      remove.addEventListener("click", () => void change((p) => {
+        const uses = { ...p.uses, [category]: { ...(p.uses[category] ?? {}) } };
+        delete uses[category]![site.host];
+        const pinned = { ...p.pinned };
+        if (pinned[category] === site.host) delete pinned[category];
+        return { ...p, uses, pinned };
+      }));
+      chip.appendChild(remove);
+      chips.appendChild(chip);
+    }
+    row.append(name, chips);
+    sitesEl.appendChild(row);
+  }
+}
+
+async function change(edit: (prefs: SitePrefs) => SitePrefs): Promise<void> {
+  await updatePrefs(edit);
+  renderSites(await loadPrefs());
+}
+
+$("pin-add").addEventListener("click", () => {
+  const raw = pinHost.value.trim();
+  const host = siteOf(/^https?:\/\//.test(raw) ? raw : `https://${raw}`);
+  if (!host || !host.includes(".")) {
+    pinHost.setCustomValidity("Enter a website such as makemytrip.com");
+    pinHost.reportValidity();
+    return;
+  }
+  pinHost.setCustomValidity("");
+  const category = pinCategory.value as SiteCategory;
+  pinHost.value = "";
+  void change((p) => ({ ...p, pinned: { ...p.pinned, [category]: host } }));
+});
+pinHost.addEventListener("input", () => pinHost.setCustomValidity(""));
+
+$("sites-clear").addEventListener("click", () => {
+  if (!confirm("Forget every preferred website VLESS has learned or you have set?")) return;
+  void savePrefs({ version: 1, uses: {}, pinned: {} }).then(async () => renderSites(await loadPrefs()));
+});
 
 for (const id of PROVIDER_IDS) {
   const button = document.createElement("button");
@@ -128,7 +255,10 @@ $("save").addEventListener("click", async () => {
   settings.maxSteps = Math.min(200, Math.max(5, Number(maxStepsEl.value) || 40));
   settings.reasoningEffort =
     reasoningEl.value === "off" || reasoningEl.value === "deep" ? reasoningEl.value : "standard";
-  settings.ocrMode = ocrEl.value === "off" || ocrEl.value === "full" ? ocrEl.value : "images";
+  settings.ocrMode = ocrEl.value === "images" ? "images" : "full";
+  settings.suggestForPage = suggestEl.checked;
+  settings.rememberSites = rememberEl.checked;
+  settings.learnFromBrowsing = learnEl.checked;
   settings.confirmRisky = confirmRiskyEl.checked;
   settings.sendScreenshot = sendScreenshotEl.checked;
   settings.fullPageCapture = fullPageCaptureEl.checked;
@@ -170,4 +300,5 @@ void (async () => {
   const stored = await chrome.storage.local.get("settings");
   settings = normaliseSettings(stored.settings);
   render();
+  renderSites(await loadPrefs());
 })();
